@@ -4,11 +4,19 @@ require("dotenv").config();
 
 const connectDatabase = require("./config/database");
 const authenticate = require("./config/auth");
+const { findOrCreateFromFirebaseClaims } = require("./services/users/userService");
+const { registerIntegration } = require("./services/integrations/integrationRegistry");
+const googleIntegration = require("./services/integrations/googleIntegration");
+const googleIntegrationRoutes = require("./routes/googleIntegrationRoutes");
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use("/api/integrations/google", googleIntegrationRoutes);
+
+// Providers self-describe their capabilities so action orchestration stays provider-agnostic.
+registerIntegration(googleIntegration);
 
 app.get("/api/health", (req, res) => {
   res.status(200).json({
@@ -18,7 +26,9 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-app.get("/api/auth/me", authenticate, (req, res) => {
+app.get("/api/auth/me", authenticate, async (req, res, next) => {
+  try {
+    await findOrCreateFromFirebaseClaims(req.user);
   res.status(200).json({
     success: true,
     user: {
@@ -28,6 +38,14 @@ app.get("/api/auth/me", authenticate, (req, res) => {
       picture: req.user.picture || null,
     },
   });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use((error, req, res, next) => {
+  console.error("Unhandled API error:", error.message);
+  res.status(500).json({ success: false, message: "Internal server error" });
 });
 
 const PORT = process.env.PORT || 5000;

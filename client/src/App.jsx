@@ -1,121 +1,91 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useEffect, useState } from 'react'
+import { getCurrentIdToken, observeAuthState } from './services/auth'
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [signedIn, setSignedIn] = useState(false)
+  const [connection, setConnection] = useState(null)
+  const [message, setMessage] = useState('')
+
+  const callApi = async (path, options = {}) => {
+    const token = await getCurrentIdToken()
+    if (!token) throw new Error('Sign in to NOMI before connecting Google.')
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers: { Authorization: `Bearer ${token}`, ...options.headers },
+    })
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.message || 'Google connection request failed.')
+    return data
+  }
+
+  const loadStatus = async () => {
+    try {
+      const data = await callApi('/api/integrations/google/status')
+      setConnection(data)
+    } catch (error) {
+      setMessage(error.message)
+    }
+  }
+
+  useEffect(() => observeAuthState((user) => {
+    setSignedIn(Boolean(user))
+    if (!user) {
+      setConnection(null)
+      return
+    }
+    ;(async () => {
+      try {
+        const token = await user.getIdToken()
+        const response = await fetch(`${API_BASE_URL}/api/integrations/google/status`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.message || 'Unable to check Google connection.')
+        setConnection(data)
+      } catch (error) {
+        setMessage(error.message)
+      }
+    })()
+  }), [])
+
+  const connectGoogle = async () => {
+    try {
+      const data = await callApi('/api/integrations/google/connect?mode=json')
+      window.location.assign(data.authorizationUrl)
+    } catch (error) {
+      setMessage(error.message)
+    }
+  }
+
+  const disconnectGoogle = async () => {
+    try {
+      await callApi('/api/integrations/google', { method: 'DELETE' })
+      await loadStatus()
+      setMessage('Google account disconnected.')
+    } catch (error) {
+      setMessage(error.message)
+    }
+  }
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
+    <main>
+      <h1>NOMI</h1>
+      <p>Application setup in progress.</p>
+      <section aria-label="Temporary Google connection test surface">
+        <h2>Google connection (development)</h2>
+        {!signedIn && <p>Sign in to NOMI first, then return here to connect Google.</p>}
+        {signedIn && connection?.connected && (
+          <>
+            <p>Connected as {connection.account.email} ({connection.account.status}).</p>
+            <button type="button" onClick={disconnectGoogle}>Disconnect Google</button>
+          </>
+        )}
+        {signedIn && !connection?.connected && <button type="button" onClick={connectGoogle}>Connect Google</button>}
+        {message && <p role="status">{message}</p>}
       </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+    </main>
   )
 }
 
