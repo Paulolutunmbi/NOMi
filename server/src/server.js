@@ -8,12 +8,14 @@ const { findOrCreateFromFirebaseClaims } = require("./services/users/userService
 const { registerIntegration } = require("./services/integrations/integrationRegistry");
 const googleIntegration = require("./services/integrations/googleIntegration");
 const googleIntegrationRoutes = require("./routes/googleIntegrationRoutes");
+const { createAIIntentRouter } = require("./routes/aiIntentRoutes");
 
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "16kb" }));
 app.use("/api/integrations/google", googleIntegrationRoutes);
+app.use("/api/ai", createAIIntentRouter());
 
 // Providers self-describe their capabilities so action orchestration stays provider-agnostic.
 registerIntegration(googleIntegration);
@@ -63,4 +65,6 @@ const startServer = async () => {
   }
 };
 
-startServer();
+if (require.main === module) startServer();
+
+module.exports = { app, startServer };
