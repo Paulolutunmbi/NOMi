@@ -13,10 +13,10 @@ const INTENT_SCHEMA = {
         type: "object",
         additionalProperties: false,
         properties: {
-          messageId: { type: "string" }, query: { type: "string" }, maxResults: { type: "integer" },
-          recipient: { type: "string" }, subject: { type: "string" }, body: { type: "string" },
+          messageId: { type: ["string", "null"] }, query: { type: ["string", "null"] }, maxResults: { type: ["integer", "null"] },
+          recipient: { type: ["string", "null"] }, subject: { type: ["string", "null"] }, body: { type: ["string", "null"] },
         },
-        required: [],
+        required: ["body", "maxResults", "messageId", "query", "recipient", "subject"],
       },
     },
     required: ["action", "parameters"],

@@ -4,6 +4,7 @@ const ACTIONS = {
   "gmail.draft": { required: ["recipient", "body"], allowed: ["recipient", "subject", "body"] },
   "gmail.send": { required: ["recipient", "body"], allowed: ["recipient", "subject", "body"] },
 };
+const SCHEMA_PARAMETERS = ["body", "maxResults", "messageId", "query", "recipient", "subject"];
 const SAFE_STRING = (value, max = 10000) => typeof value === "string" && value.trim().length > 0 && value.length <= max;
 
 const validateIntent = (intent) => {
@@ -13,9 +14,10 @@ const validateIntent = (intent) => {
   if (!intent.parameters || typeof intent.parameters !== "object" || Array.isArray(intent.parameters)) return { valid: false, reason: "parameters_must_be_an_object" };
   const rule = ACTIONS[intent.action];
   const keys = Object.keys(intent.parameters);
-  if (keys.some((key) => !rule.allowed.includes(key))) return { valid: false, reason: "unexpected_parameter" };
+  if (keys.some((key) => !SCHEMA_PARAMETERS.includes(key))) return { valid: false, reason: "unexpected_parameter" };
+  if (keys.some((key) => intent.parameters[key] !== null && !rule.allowed.includes(key))) return { valid: false, reason: "unexpected_parameter" };
   if (rule.required.some((key) => !SAFE_STRING(intent.parameters[key]))) return { valid: false, reason: "missing_or_invalid_parameter" };
-  if (intent.parameters.maxResults !== undefined && (!Number.isInteger(intent.parameters.maxResults) || intent.parameters.maxResults < 1 || intent.parameters.maxResults > 50)) return { valid: false, reason: "invalid_max_results" };
+  if (intent.parameters.maxResults !== undefined && intent.parameters.maxResults !== null && (!Number.isInteger(intent.parameters.maxResults) || intent.parameters.maxResults < 1 || intent.parameters.maxResults > 50)) return { valid: false, reason: "invalid_max_results" };
   return { valid: true, intent: { action: intent.action, parameters: { ...intent.parameters } } };
 };
 

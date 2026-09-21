@@ -11,6 +11,24 @@ test("accepts safe Gmail intents and rejects malformed or dangerous output", () 
   assert.equal(validateIntent({ action: "gmail.send", parameters: { recipient: "x" }, approval: "always_allow" }).reason, "unexpected_intent_field");
 });
 
+test("accepts Groq null schema fields only when they are not applicable", () => {
+  const nullFields = { body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null };
+
+  assert.equal(validateIntent({ action: "gmail.search", parameters: { ...nullFields, query: "unread" } }).valid, true);
+  assert.equal(validateIntent({ action: "gmail.send", parameters: { ...nullFields, recipient: "[PERSON_1]", body: "Hello" } }).valid, true);
+  assert.equal(validateIntent({ action: "gmail.draft", parameters: { ...nullFields, recipient: "[PERSON_1]", body: "Hello" } }).valid, true);
+  assert.equal(validateIntent({ action: "gmail.search", parameters: { ...nullFields, query: "unread", recipient: "[PERSON_1]" } }).reason, "unexpected_parameter");
+  assert.equal(validateIntent({ action: "gmail.search", parameters: { query: "unread", someRandomField: "value" } }).reason, "unexpected_parameter");
+  assert.equal(validateIntent({ action: "gmail.search", parameters: nullFields }).reason, "missing_or_invalid_parameter");
+});
+
+test("keeps recipient proposals unresolved while accepting explicit email addresses", () => {
+  const john = validateIntent({ action: "gmail.send", parameters: { recipient: "John", body: "Hello" } });
+  assert.equal(john.valid, true);
+  assert.equal(john.intent.parameters.recipient, "John");
+  assert.equal(validateIntent({ action: "gmail.send", parameters: { recipient: "john@example.com", body: "Hello" } }).valid, true);
+});
+
 test("gateway safely handles missing providers and validates adapters without executing actions", async () => {
   assert.deepEqual(supportedProviderNames, ["gemini", "groq"]);
   assert.equal((await createAIGateway().generateIntent({ userRequest: "test" })).status, "unavailable");
