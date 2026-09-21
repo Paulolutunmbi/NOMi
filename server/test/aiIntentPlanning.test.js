@@ -41,6 +41,18 @@ test("the proposal layer rejects invented, missing, and untrusted Gmail message 
   assert.equal(missing.reason, "missing_or_invalid_parameter");
 });
 
+test("a user-supplied arbitrary message ID cannot become a search or read target", async () => {
+  let called = false;
+  const gateway = createAIGateway({
+    providerName: "groq",
+    adapters: { groq: { generateIntent: async () => { called = true; return { action: "gmail.search", parameters: parameters({ query: "abc123" }) }; } } },
+  });
+  const result = await gateway.generateIntent({ safeInput: { userRequest: "Read Gmail message abc123.", untrustedRetrievedContent: [] } });
+  assert.equal(result.status, "invalid");
+  assert.equal(result.reason, "untrusted_or_unknown_message_id");
+  assert.equal(called, false);
+});
+
 test("the model policy makes Gmail action preconditions explicit without changing trust boundaries", () => {
   const prompt = buildIntentPrompt({ userRequest: "Read the email from John about the project.", untrustedRetrievedContent: [] });
   assert.match(prompt.system, /gmail\.search: propose/i);

@@ -54,9 +54,14 @@ const storeGoogleConnection = async ({ user, tokens, profile }) => {
 };
 
 const getGoogleAuthForUser = async (userId) => {
-  const account = await ConnectedAccount.findOne({ user: userId, provider: "google", status: { $in: ["connected", "active"] } })
+  const account = await ConnectedAccount.findOne({ user: userId, provider: "google" })
     .select("+encryptedRefreshToken +encryptedAccessToken +accessTokenExpiresAt");
-  if (!account?.encryptedRefreshToken) {
+  if (!account) {
+    const error = new Error("Google account is not connected");
+    error.code = "google_not_connected";
+    throw error;
+  }
+  if (["revoked", "error"].includes(account.status) || !account.encryptedRefreshToken) {
     const error = new Error("Google connection needs to be reconnected");
     error.code = "google_reconnect_required";
     throw error;

@@ -1,6 +1,7 @@
 const { validateIntent } = require("./intentValidator");
 const { buildIntentPrompt } = require("./promptBoundary");
 const { prepareAIInput } = require("../privacy/privacyService");
+const { explicitlyRequestedRecipientPlaceholders, unsupportedRequestReason, untrustedRequestedMessageId } = require("./intentSafetyPolicy");
 
 const createAIGateway = ({ providerName = process.env.AI_PROVIDER, adapters = {} } = {}) => ({
   async generateIntent(input) {
@@ -9,11 +10,16 @@ const createAIGateway = ({ providerName = process.env.AI_PROVIDER, adapters = {}
     const prepared = input.safeInput ? { payload: input.safeInput, mappings: input.placeholderMappings || {} } : prepareAIInput(input);
     let response;
     const prompt = buildIntentPrompt({ ...prepared.payload, trustedConversationContext: input.trustedConversationContext || prepared.payload.trustedConversationContext });
+    const unsupportedReason = unsupportedRequestReason(prompt.userRequest);
+    if (unsupportedReason) return { status: "invalid", provider: providerName, reason: unsupportedReason };
+    if (untrustedRequestedMessageId(prompt.userRequest, prompt.trustedConversationContext.gmailMessageIds)) {
+      return { status: "invalid", provider: providerName, reason: "untrusted_or_unknown_message_id" };
+    }
     try { response = await adapter.generateIntent(prompt); }
     catch (error) { return { status: "provider_error", provider: providerName, reason: error.code || "ai_provider_unavailable" }; }
     const validation = validateIntent(response, {
       trustedGmailMessageIds: prompt.trustedConversationContext.gmailMessageIds,
-      recipientPlaceholders: Object.entries(prepared.mappings).filter(([, value]) => value.type === "EMAIL").map(([placeholder]) => placeholder),
+      recipientPlaceholders: explicitlyRequestedRecipientPlaceholders(prompt.userRequest, prepared.mappings),
     });
     return validation.valid
       ? { status: "proposed", provider: providerName, intent: validation.intent, placeholderMappings: prepared.mappings }
