@@ -1,5 +1,4 @@
 const express = require("express");
-const authenticate = require("../middleware/auth");
 const { findOrCreateFromFirebaseClaims } = require("../services/users/userService");
 const { createConversationContextService } = require("../services/conversations/conversationContextService");
 const { prepareAIInput, restorePlaceholders } = require("../services/privacy/privacyService");
@@ -12,9 +11,12 @@ const MAX_MESSAGE_LENGTH = 4000;
 const validConversationId = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const clientError = (res, status, code, message) => res.status(status).json({ success: false, error: { code, message } });
 
-const createAIIntentRouter = ({ gateway, contextService = createConversationContextService(), audit = writeAIAudit, getUser = findOrCreateFromFirebaseClaims, config = getAIConfig() } = {}) => {
+const createAIIntentRouter = ({ gateway, contextService = createConversationContextService(), audit = writeAIAudit, getUser = findOrCreateFromFirebaseClaims, config = getAIConfig(), authMiddleware } = {}) => {
   const router = express.Router();
-  router.post("/intent", authenticate, async (req, res, next) => {
+  // Delay Firebase module loading so route behavior remains unit-testable
+  // without credentials; production continues to use the same middleware.
+  const requireAuth = authMiddleware || require("../middleware/auth");
+  router.post("/intent", requireAuth, async (req, res, next) => {
     const { conversationId, message } = req.body || {};
     if (Object.keys(req.body || {}).some((key) => !["conversationId", "message"].includes(key)) || !validConversationId(conversationId) || typeof message !== "string" || !message.trim() || message.length > MAX_MESSAGE_LENGTH) {
       return clientError(res, 400, "AI_REQUEST_INVALID", "A valid conversation and message are required.");
@@ -29,7 +31,13 @@ const createAIIntentRouter = ({ gateway, contextService = createConversationCont
       // are never part of the model payload, audit record, or API response.
       await contextService.update({ userId: user._id, conversationId, placeholderMappings: safe.mappings });
       const selectedGateway = gateway || createAIGateway({ providerName: config.provider, adapters: config.provider === "groq" ? { groq: createGroqProvider({ config }) } : {} });
-      const result = await selectedGateway.generateIntent({ safeInput: safe.payload });
+      // The client can never supply this data: it is read from the matching
+      // user-bound TTL record and normalized again at the prompt boundary.
+      const result = await selectedGateway.generateIntent({
+        safeInput: safe.payload,
+        placeholderMappings: safe.mappings,
+        trustedConversationContext: { gmailMessageIds: conversation.gmailMessageIds || [] },
+      });
       if (result.status === "proposed") {
         const intent = restorePlaceholders(result.intent, safe.mappings);
         await audit({ user, provider: config.provider, conversationId, outcome: "success" }).catch(() => {});

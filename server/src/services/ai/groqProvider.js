@@ -8,7 +8,7 @@ const INTENT_SCHEMA = {
     type: "object",
     additionalProperties: false,
     properties: {
-      action: { type: "string", enum: ["gmail.read", "gmail.search", "gmail.draft", "gmail.send"] },
+      action: { type: "string", enum: ["gmail.read", "gmail.search", "gmail.draft", "gmail.send", "gmail.draft.reply", "gmail.send.reply"] },
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -50,7 +50,7 @@ const createGroqProvider = ({ config = getAIConfig(), client } = {}) => {
           temperature: 0,
           messages: [
             { role: "system", content: prompt.system },
-            { role: "user", content: JSON.stringify({ userRequest: prompt.userRequest, untrustedRetrievedContent: prompt.untrustedRetrievedContent }) },
+            { role: "user", content: JSON.stringify({ userRequest: prompt.userRequest, untrustedRetrievedContent: prompt.untrustedRetrievedContent, trustedConversationContext: prompt.trustedConversationContext }) },
           ],
           response_format: { type: "json_schema", json_schema: INTENT_SCHEMA },
         });

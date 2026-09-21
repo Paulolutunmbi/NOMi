@@ -3,12 +3,16 @@ const assert = require("node:assert/strict");
 const { prepareAIInput } = require("../src/services/privacy/privacyService");
 const { buildIntentPrompt } = require("../src/services/ai/promptBoundary");
 const { validateIntent } = require("../src/services/ai/intentValidator");
+const parameters = (values = {}) => ({ body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null, ...values });
 
-test("personal data is redacted before an AI-safe payload is built", () => {
-  const safe = prepareAIInput({ userRequest: "Send John an email saying I will meet him at 3 PM.", protectedValues: ["John"] });
-  assert.match(safe.payload.userRequest, /\[PERSON_1\]/);
-  assert.doesNotMatch(safe.payload.userRequest, /John/);
-  assert.equal(safe.mappings["[PERSON_1]"].value, "John");
+test("protected data is redacted but ordinary names remain visible", () => {
+  const safe = prepareAIInput({ userRequest: "Send John an email to john@example.com. Call +234 801 234 5678. secret=abcdefghi. Card 4111 1111 1111 1111" });
+  assert.match(safe.payload.userRequest, /John/);
+  assert.match(safe.payload.userRequest, /\[EMAIL_1\]/);
+  assert.match(safe.payload.userRequest, /\[PHONE_1\]/);
+  assert.match(safe.payload.userRequest, /\[SECRET_1\]/);
+  assert.match(safe.payload.userRequest, /\[CARD_1\]/);
+  assert.equal(Object.values(safe.mappings).some((item) => item.value === "john@example.com"), true);
   assert.equal(Object.hasOwn(safe.payload, "mappings"), false);
 });
 
@@ -20,8 +24,8 @@ test("malicious retrieved content stays untrusted data in the prompt boundary", 
 });
 
 test("only supported, complete Gmail intents validate", () => {
-  assert.equal(validateIntent({ action: "gmail.draft", parameters: { recipient: "[EMAIL_1]", body: "Hello" } }).valid, true);
+  assert.equal(validateIntent({ action: "gmail.draft", parameters: parameters({ recipient: "[EMAIL_1]", body: "Hello" }) }, { recipientPlaceholders: ["[EMAIL_1]"] }).valid, true);
   assert.equal(validateIntent({ action: "calendar.create", parameters: {} }).valid, false);
-  assert.equal(validateIntent({ action: "gmail.send", parameters: { recipient: "a@example.com" } }).valid, false);
+  assert.equal(validateIntent({ action: "gmail.send", parameters: parameters({ recipient: "a@example.com" }) }).valid, false);
   assert.equal(validateIntent("not JSON").valid, false);
 });

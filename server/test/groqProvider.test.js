@@ -11,8 +11,9 @@ test("Groq configuration fails safely without an API key", () => {
 });
 test("Groq provider requests structured JSON and parses it", async () => {
   let request;
-  const provider = createGroqProvider({ config: { provider: "groq", groqApiKey: "test", groqModel: DEFAULT_GROQ_MODEL }, client: { chat: { completions: { create: async (input) => { request = input; return { choices: [{ message: { content: '{"action":"gmail.search","parameters":{"query":"invoices"}}' } }] }; } } } } });
-  const intent = await provider.generateIntent({ system: "system", userRequest: "request", untrustedRetrievedContent: [] });
+  const provider = createGroqProvider({ config: { provider: "groq", groqApiKey: "test", groqModel: DEFAULT_GROQ_MODEL }, client: { chat: { completions: { create: async (input) => { request = input; return { choices: [{ message: { content: '{"action":"gmail.search","parameters":{"body":null,"maxResults":null,"messageId":null,"query":"invoices","recipient":null,"subject":null}}' } }] }; } } } } });
+  const intent = await provider.generateIntent({ system: "system", userRequest: "request", untrustedRetrievedContent: [], trustedConversationContext: { gmailMessageIds: ["trusted"] } });
   assert.equal(request.response_format.type, "json_schema");
-  assert.deepEqual(intent, { action: "gmail.search", parameters: { query: "invoices" } });
+  assert.deepEqual(intent, { action: "gmail.search", parameters: { body: null, maxResults: null, messageId: null, query: "invoices", recipient: null, subject: null } });
+  assert.deepEqual(JSON.parse(request.messages[1].content).trustedConversationContext, { gmailMessageIds: ["trusted"] });
 });
