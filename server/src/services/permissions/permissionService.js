@@ -26,4 +26,18 @@ const savePersistentDecision = async ({ userId, provider, action, decision }) =>
   );
 };
 
-module.exports = { checkPermission, savePersistentDecision };
+const listPersistentPermissions = async ({ userId }) => Permission.find({ user: userId, decision: "always_allow" })
+  .select("provider action decision createdAt updatedAt")
+  .sort({ provider: 1, action: 1 })
+  .lean();
+
+// This deliberately removes only the exact user/provider/action record. It
+// does not touch a connected account or any neighbouring capabilities.
+const revokePersistentPermission = async ({ userId, provider, action }) => Permission.deleteOne({
+  user: userId,
+  provider,
+  action,
+  decision: "always_allow",
+});
+
+module.exports = { checkPermission, savePersistentDecision, listPersistentPermissions, revokePersistentPermission };

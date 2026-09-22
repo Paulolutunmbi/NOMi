@@ -1,5 +1,5 @@
 const AuditLog = require("../../models/AuditLog");
-const { checkPermission } = require("../permissions/permissionService");
+const { checkPermission, savePersistentDecision } = require("../permissions/permissionService");
 const { getIntegration } = require("../integrations/integrationRegistry");
 
 const writeAudit = (entry) => AuditLog.create(entry);
@@ -15,33 +15,41 @@ const sanitizeAuditMetadata = (value, depth = 0) => {
     .map(([key, item]) => [key, sanitizeAuditMetadata(item, depth + 1)]));
 };
 
-const executeAction = async ({ user, provider, action, payload = {}, target, approval }) => {
-  const permission = await checkPermission({ userId: user._id, provider, action });
+const createActionExecutor = ({ check = checkPermission, save = savePersistentDecision, getProvider = getIntegration, audit = writeAudit } = {}) => async ({ user, provider, action, payload = {}, target, approval }) => {
+  const permission = await check({ userId: user._id, provider, action });
   const permissionDecision = permission.decision || approval || null;
 
   if (permission.decision === "deny" || approval === "deny") {
-    await writeAudit({ user: user._id, provider, action, target, permissionRequired: false, permissionDecision: "deny", outcome: "failure" });
+    await audit({ user: user._id, provider, action, target, permissionRequired: false, permissionDecision: "deny", outcome: "failure" });
     return { status: "denied", provider, action };
   }
 
-  if (!permission.allowed && approval !== "allow_once") {
-    await writeAudit({ user: user._id, provider, action, target, permissionRequired: true, permissionDecision: permissionDecision || "not_required", outcome: "pending_approval" });
+  if (!permission.allowed && !["allow_once", "always_allow"].includes(approval)) {
+    await audit({ user: user._id, provider, action, target, permissionRequired: true, permissionDecision: permissionDecision || "not_required", outcome: "pending_approval" });
     return { status: "approval_required", provider, action };
   }
 
-  const integration = getIntegration(provider);
+  const integration = getProvider(provider);
   if (!integration || !integration.capabilities?.includes(action)) {
     throw new Error(`Unsupported integration action: ${provider}.${action}`);
   }
 
+  // The stored key is the exact provider/action pair. There is intentionally
+  // no provider-wide Gmail grant or action-prefix matching here.
+  if (!permission.allowed && approval === "always_allow") {
+    await save({ userId: user._id, provider, action, decision: "always_allow" });
+  }
+
   try {
     const result = await integration.execute({ user, action, payload });
-    await writeAudit({ user: user._id, provider, action, target, permissionRequired: !permission.allowed, permissionDecision: permission.allowed ? "always_allow" : "allow_once", outcome: "success", metadata: sanitizeAuditMetadata(result?.auditMetadata || {}) });
+    await audit({ user: user._id, provider, action, target, permissionRequired: !permission.allowed, permissionDecision: permission.allowed || approval === "always_allow" ? "always_allow" : "allow_once", outcome: "success", metadata: sanitizeAuditMetadata(result?.auditMetadata || {}) });
     return { status: "success", result };
   } catch (error) {
-    await writeAudit({ user: user._id, provider, action, target, permissionRequired: !permission.allowed, permissionDecision: permission.allowed ? "always_allow" : "allow_once", outcome: "failure", metadata: { errorCode: error.code || "execution_failed" } });
+    await audit({ user: user._id, provider, action, target, permissionRequired: !permission.allowed, permissionDecision: permission.allowed || approval === "always_allow" ? "always_allow" : "allow_once", outcome: "failure", metadata: { errorCode: error.code || "execution_failed" } });
     throw error;
   }
 };
 
-module.exports = { executeAction, sanitizeAuditMetadata };
+const executeAction = createActionExecutor();
+
+module.exports = { executeAction, createActionExecutor, sanitizeAuditMetadata };

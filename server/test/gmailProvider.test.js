@@ -26,9 +26,18 @@ test("gmail.search returns normalized, MIME-free messages and bounds results", a
   const fake = fakeGmail();
   const result = await providerFor(fake).execute({}, "gmail.search", { query: "from:aminat", maxResults: 999 });
   assert.equal(fake.calls.list[0].maxResults, 50);
-  assert.deepEqual(Object.keys(result.messages[0]).sort(), ["date", "id", "recipient", "sender", "snippet", "subject", "threadId"].sort());
+  assert.deepEqual(Object.keys(result.messages[0]).sort(), ["date", "from", "id", "recipient", "sender", "snippet", "subject", "threadId"].sort());
+  assert.deepEqual(result.messages[0].from, { name: "Aminat Bello", email: "aminat@example.com" });
+  assert.equal(fake.calls.list[0].q, "from:aminat");
   assert.equal(JSON.stringify(result).includes("payload"), false);
   assert.equal(JSON.stringify(result).includes("Private plain-text"), false);
+});
+
+test("gmail.read sender parsing remains the original raw header value", async () => {
+  const fake = fakeGmail();
+  const read = await providerFor(fake).execute({}, "gmail.read", { messageId: "m1" });
+  assert.equal(read.message.sender, "Aminat Bello <aminat@example.com>");
+  assert.equal(Object.hasOwn(read.message, "from"), false);
 });
 
 test("gmail.read returns bounded normalized content and rejects missing IDs", async () => {

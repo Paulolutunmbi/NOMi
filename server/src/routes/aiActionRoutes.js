@@ -18,7 +18,7 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
     const { conversationId, message, approval } = req.body || {};
     if (Object.keys(req.body || {}).some((key) => !["conversationId", "message", "approval"].includes(key))
       || !validConversationId(conversationId) || typeof message !== "string" || !message.trim() || message.length > 4000
-      || (approval !== undefined && !["allow_once", "deny"].includes(approval))) return fail(res, 400, "AI_ACTION_REQUEST_INVALID", "A valid conversation and message are required.");
+      || (approval !== undefined && !["allow_once", "always_allow", "deny"].includes(approval))) return fail(res, 400, "AI_ACTION_REQUEST_INVALID", "A valid conversation and message are required.");
     try {
       const user = await getUser(req.user);
       let conversation = await contextService.getActive({ userId: user._id, conversationId });

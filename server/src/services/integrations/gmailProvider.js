@@ -82,6 +82,14 @@ const addressFromHeader = (value) => {
   const match = String(value || "").match(/<([^<>\s]+@[^<>\s]+)>/) || String(value || "").match(/[^\s<>@,]+@[^\s<>@,]+\.[^\s<>@,]+/);
   return match?.[1] || match?.[0] || null;
 };
+const senderFromHeader = (value) => {
+  const raw = text(value);
+  const email = addressFromHeader(raw);
+  if (!email) return { name: raw || null, email: null };
+  const name = text(raw.replace(/<[^>]*>/g, "").replace(/^\s*['\"]|['\"]\s*$/g, "")) || null;
+  return { name, email };
+};
+const normalizeSearchMessage = (message) => ({ ...normalizeMessage(message), from: senderFromHeader(header(message, "From")) });
 
 const createGmailProvider = ({ gmailFactory } = {}) => {
   const clientFor = (auth) => (gmailFactory ? gmailFactory(auth) : require("googleapis").google.gmail({ version: "v1", auth }));
@@ -101,7 +109,7 @@ const createGmailProvider = ({ gmailFactory } = {}) => {
         const maxResults = Math.min(requested, MAX_RESULTS);
         const listed = await gmail.users.messages.list({ userId: "me", q: query, maxResults });
         const records = await Promise.all((listed.data.messages || []).slice(0, maxResults).map(({ id }) => getMessage(gmail, id, "metadata", ["From", "To", "Subject", "Date"])));
-        return { messages: records.map((message) => normalizeMessage(message)), auditMetadata: { count: records.length } };
+        return { messages: records.map(normalizeSearchMessage), auditMetadata: { count: records.length } };
       }
       if (action === "gmail.read") {
         const id = messageId(payload.messageId);
@@ -141,4 +149,4 @@ const createGmailProvider = ({ gmailFactory } = {}) => {
   return { execute };
 };
 
-module.exports = { createGmailProvider, normalizeGoogleError, SUPPORTED_ACTIONS, MAX_BODY_LENGTH };
+module.exports = { createGmailProvider, normalizeGoogleError, SUPPORTED_ACTIONS, MAX_BODY_LENGTH, senderFromHeader };

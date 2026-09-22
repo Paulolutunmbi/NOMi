@@ -7,6 +7,7 @@ if (process.env.NODE_ENV === "production") {
   const { createGroqProvider } = require("../src/services/ai/groqProvider");
   const { getAIConfig } = require("../src/config/ai");
   const { buildIntentPrompt } = require("../src/services/ai/promptBoundary");
+  const { isSelfRecipientMarker } = require("../src/services/ai/intentValidator");
 
   const sensitiveDetailPattern = /(?:authorization|api[-_ ]?key|oauth|token|secret|bearer|gsk_[a-z0-9_-]+|(?:request|prompt|input|messages?|content)\s*[:=])/i;
   const safeMessage = (value) => {
@@ -58,7 +59,9 @@ if (process.env.NODE_ENV === "production") {
       const provider = createGroqProvider();
       const intent = await provider.generateIntent(buildIntentPrompt({ userRequest: "Search Gmail for invoices.", untrustedRetrievedContent: [] }));
       if (!intent || typeof intent !== "object") throw new Error("No structured intent returned");
-      console.log("Groq structured intent connection verified.");
+      const selfIntent = await provider.generateIntent(buildIntentPrompt({ userRequest: "Draft an email to my own email address saying this is a NOMI test.", untrustedRetrievedContent: [] }));
+      if (selfIntent?.action !== "gmail.draft" || !isSelfRecipientMarker(selfIntent?.parameters?.recipient)) throw new Error("Self-recipient response did not match the expected structured shape");
+      console.log("Groq structured intent connection and self-recipient response shape verified.");
     } catch (error) {
       console.error("Groq connection check failed safely.");
       console.error(JSON.stringify(safeDiagnostic(error), null, 2));

@@ -1,4 +1,7 @@
-const MESSAGE_ID_REQUEST = /\b(?:gmail\s+)?message\s+([A-Za-z0-9_-]{6,})\b/i;
+const MESSAGE_ID_PATTERN = /\b(?:gmail\s+)?message\s+(?:id\s+|#\s*)?([0-9a-fA-F]{6,64}|(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{6,64})\b/i;
+const PRONOUN_TARGET = /\b(?:him|her|them|that\s+person|this\s+person|the\s+sender)\b/i;
+const EXPLICIT_SEARCH_OR_READ = /\b(?:find|search|look\s*(?:for|up)|locate|check|scan|read|query|fetch)\b/i;
+const COMPOSE_OR_REPLY = /\b(?:craft|compose|draft|send|write|tell|reply|respond|response|message)\b/i;
 
 const unsupportedRequestReason = (userRequest) => {
   if (typeof userRequest !== "string") return null;
@@ -13,6 +16,20 @@ const unsupportedRequestReason = (userRequest) => {
 const hasEmbeddedInstruction = (userRequest) => typeof userRequest === "string"
   && /\b(ignore|disregard|override)\b[^.!?]{0,80}\b(previous|prior|system|instructions?|policy)\b/i.test(userRequest);
 
+const isExplicitSearchOrReadRequest = (userRequest) => typeof userRequest === "string"
+  && EXPLICIT_SEARCH_OR_READ.test(userRequest);
+
+const isPronounOrMissingTargetRequest = (userRequest) => typeof userRequest === "string"
+  && !hasEmbeddedInstruction(userRequest)
+  && (PRONOUN_TARGET.test(userRequest) || COMPOSE_OR_REPLY.test(userRequest));
+
+const requiresTargetClarification = (userRequest, trustedGmailMessageIds = []) => {
+  if (typeof userRequest !== "string" || hasEmbeddedInstruction(userRequest)) return false;
+  if (Array.isArray(trustedGmailMessageIds) && trustedGmailMessageIds.length > 0) return false;
+  if (isExplicitSearchOrReadRequest(userRequest)) return false;
+  return isPronounOrMissingTargetRequest(userRequest);
+};
+
 const explicitlyRequestedRecipientPlaceholders = (userRequest, mappings = {}) => {
   if (hasEmbeddedInstruction(userRequest)) return [];
   const placeholders = Object.entries(mappings)
@@ -25,8 +42,19 @@ const explicitlyRequestedRecipientPlaceholders = (userRequest, mappings = {}) =>
 };
 
 const untrustedRequestedMessageId = (userRequest, trustedGmailMessageIds = []) => {
-  const match = typeof userRequest === "string" && userRequest.match(MESSAGE_ID_REQUEST);
+  if (typeof userRequest !== "string") return null;
+  const match = userRequest.match(MESSAGE_ID_PATTERN);
   return match && !trustedGmailMessageIds.includes(match[1]) ? match[1] : null;
 };
 
-module.exports = { explicitlyRequestedRecipientPlaceholders, hasEmbeddedInstruction, unsupportedRequestReason, untrustedRequestedMessageId };
+module.exports = {
+  MESSAGE_ID_PATTERN,
+  PRONOUN_TARGET,
+  explicitlyRequestedRecipientPlaceholders,
+  hasEmbeddedInstruction,
+  isExplicitSearchOrReadRequest,
+  isPronounOrMissingTargetRequest,
+  requiresTargetClarification,
+  unsupportedRequestReason,
+  untrustedRequestedMessageId,
+};

@@ -16,17 +16,19 @@ test("accepts Groq null schema fields only when they are not applicable", () => 
   const nullFields = parameters();
 
   assert.equal(validateIntent({ action: "gmail.search", parameters: { ...nullFields, query: "unread" } }).valid, true);
-  assert.equal(validateIntent({ action: "gmail.send", parameters: { ...nullFields, recipient: "[PERSON_1]", body: "Hello" } }).valid, true);
-  assert.equal(validateIntent({ action: "gmail.draft", parameters: { ...nullFields, recipient: "[PERSON_1]", body: "Hello" } }).valid, true);
+  assert.equal(validateIntent({ action: "gmail.send", parameters: { ...nullFields, recipient: "[PERSON_1]", body: "Hello" } }).reason, "unresolved_recipient");
+  assert.equal(validateIntent({ action: "gmail.draft", parameters: { ...nullFields, recipient: "[PERSON_1]", body: "Hello" } }).reason, "unresolved_recipient");
   assert.equal(validateIntent({ action: "gmail.search", parameters: { ...nullFields, query: "unread", recipient: "[PERSON_1]" } }).reason, "unexpected_parameter");
   assert.equal(validateIntent({ action: "gmail.search", parameters: { ...parameters({ query: "unread" }), someRandomField: "value" } }).reason, "incomplete_provider_output");
   assert.equal(validateIntent({ action: "gmail.search", parameters: nullFields }).reason, "missing_or_invalid_parameter");
 });
 
-test("keeps recipient proposals unresolved while accepting explicit email addresses", () => {
-  const john = validateIntent({ action: "gmail.send", parameters: parameters({ recipient: "John", body: "Hello" }) });
-  assert.equal(john.valid, true);
-  assert.equal(john.intent.parameters.recipient, "John");
+test("accepts only explicit self-recipient markers or trusted user email placeholders", () => {
+  for (const recipient of ["myself", "me", "my own email", "my own email address"]) {
+    assert.equal(validateIntent({ action: "gmail.draft", parameters: parameters({ recipient, body: "Hello" }) }).valid, true, recipient);
+  }
+  assert.equal(validateIntent({ action: "gmail.draft", parameters: parameters({ recipient: "John", body: "Hello" }) }).reason, "unresolved_recipient");
+  assert.equal(validateIntent({ action: "gmail.draft", parameters: parameters({ recipient: "arbitrary recipient string", body: "Hello" }) }).reason, "unresolved_recipient");
   assert.equal(validateIntent({ action: "gmail.send", parameters: parameters({ recipient: "john@example.com", body: "Hello" }) }).reason, "untrusted_recipient_email");
 });
 

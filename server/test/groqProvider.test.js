@@ -17,3 +17,13 @@ test("Groq provider requests structured JSON and parses it", async () => {
   assert.deepEqual(intent, { action: "gmail.search", parameters: { body: null, maxResults: null, messageId: null, query: "invoices", recipient: null, subject: null } });
   assert.deepEqual(JSON.parse(request.messages[1].content).trustedConversationContext, { gmailMessageIds: ["trusted"] });
 });
+
+test("Groq provider preserves a structured self-recipient marker without an address", async () => {
+  const provider = createGroqProvider({ config: { provider: "groq", groqApiKey: "test", groqModel: DEFAULT_GROQ_MODEL }, client: { chat: { completions: { create: async () => ({
+    choices: [{ message: { content: '{"action":"gmail.draft","parameters":{"body":"hello","maxResults":null,"messageId":null,"query":null,"recipient":"my own email address","subject":null}}' } }],
+  }) } } } });
+  const intent = await provider.generateIntent({ system: "system", userRequest: "Draft an email to my own email address saying hello.", untrustedRetrievedContent: [], trustedConversationContext: { gmailMessageIds: [] } });
+  assert.equal(intent.action, "gmail.draft");
+  assert.equal(intent.parameters.recipient, "my own email address");
+  assert.equal(intent.parameters.recipient.includes("@"), false);
+});

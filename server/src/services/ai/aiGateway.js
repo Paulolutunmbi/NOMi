@@ -1,7 +1,19 @@
 const { validateIntent } = require("./intentValidator");
 const { buildIntentPrompt } = require("./promptBoundary");
 const { prepareAIInput } = require("../privacy/privacyService");
-const { explicitlyRequestedRecipientPlaceholders, unsupportedRequestReason, untrustedRequestedMessageId } = require("./intentSafetyPolicy");
+const { explicitlyRequestedRecipientPlaceholders, requiresTargetClarification, unsupportedRequestReason, untrustedRequestedMessageId } = require("./intentSafetyPolicy");
+
+const defaultClarificationIntent = () => ({
+  action: "clarification",
+  parameters: {
+    body: "Who would you like me to send this to?",
+    maxResults: null,
+    messageId: null,
+    query: null,
+    recipient: null,
+    subject: null,
+  },
+});
 
 const createAIGateway = ({ providerName = process.env.AI_PROVIDER, adapters = {} } = {}) => ({
   async generateIntent(input) {
@@ -21,12 +33,20 @@ const createAIGateway = ({ providerName = process.env.AI_PROVIDER, adapters = {}
       trustedGmailMessageIds: prompt.trustedConversationContext.gmailMessageIds,
       recipientPlaceholders: explicitlyRequestedRecipientPlaceholders(prompt.userRequest, prepared.mappings),
     });
-    return validation.valid
-      ? { status: "proposed", provider: providerName, intent: validation.intent, placeholderMappings: prepared.mappings }
-      : { status: "invalid", provider: providerName, reason: validation.reason };
+    if (validation.valid) {
+      if (validation.intent.action === "gmail.search" && requiresTargetClarification(prompt.userRequest, prompt.trustedConversationContext.gmailMessageIds)) {
+        return { status: "proposed", provider: providerName, intent: defaultClarificationIntent(), placeholderMappings: prepared.mappings };
+      }
+      return { status: "proposed", provider: providerName, intent: validation.intent, placeholderMappings: prepared.mappings };
+    }
+    if (requiresTargetClarification(prompt.userRequest, prompt.trustedConversationContext.gmailMessageIds)
+      && !["untrusted_recipient_placeholder", "untrusted_recipient_email"].includes(validation.reason)) {
+      return { status: "proposed", provider: providerName, intent: defaultClarificationIntent(), placeholderMappings: prepared.mappings };
+    }
+    return { status: "invalid", provider: providerName, reason: validation.reason };
   },
 });
 
 // These are contracts, deliberately not SDK-backed providers. Future adapters implement generateIntent(prompt).
 const supportedProviderNames = ["gemini", "groq"];
-module.exports = { createAIGateway, supportedProviderNames };
+module.exports = { createAIGateway, supportedProviderNames, defaultClarificationIntent };

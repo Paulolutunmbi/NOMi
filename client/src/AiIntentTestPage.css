@@ -37,6 +37,26 @@
   margin-top: 28px;
 }
 
+.ai-intent-test-permissions {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--accent-border);
+}
+
+.ai-intent-test-permissions ul {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-intent-test-permissions li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .ai-intent-test-result pre {
   overflow: auto;
   padding: 12px;

@@ -8,7 +8,7 @@ const INTENT_SCHEMA = {
     type: "object",
     additionalProperties: false,
     properties: {
-      action: { type: "string", enum: ["gmail.read", "gmail.search", "gmail.draft", "gmail.send", "gmail.draft.reply", "gmail.send.reply"] },
+      action: { type: "string", enum: ["gmail.read", "gmail.search", "gmail.draft", "gmail.send", "gmail.draft.reply", "gmail.send.reply", "clarification", "gmail.search_then_reply", "gmail.search_then_draft_reply", "gmail.search_then_send_reply"] },
       parameters: {
         type: "object",
         additionalProperties: false,

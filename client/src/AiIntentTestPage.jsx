@@ -1,11 +1,12 @@
-// TEMPORARY DEVELOPMENT-ONLY HARNESS — remove after manual AI intent testing.
-import { useEffect, useState } from 'react'
+// TEMPORARY DEVELOPMENT-ONLY HARNESS — remove after manual AI action testing.
+import { useCallback, useEffect, useState } from 'react'
 import { getCurrentIdToken, observeAuthState } from './services/auth'
 import './AiIntentTestPage.css'
 
-const AI_INTENT_URL = 'http://localhost:5000/api/ai/intent'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'
+const AI_EXECUTE_URL = `${API_BASE_URL}/api/ai/execute`
 const defaultMessage = 'Find my unread emails from the last 7 days.'
-const sensitiveKey = /token|secret|credential|password|authorization|api.?key|placeholder.?mapping/i
+const sensitiveKey = /token|secret|credential|password|authorization|api.?key|placeholder.?mapping|refresh|mime|raw/i
 
 const sanitizeValue = (value) => {
   if (Array.isArray(value)) return value.map(sanitizeValue)
@@ -20,6 +21,13 @@ const sanitizeValue = (value) => {
 }
 
 const getSafeError = (data) => {
+  if (data?.outcome?.reason) {
+    return {
+      code: 'ACTION_REJECTED',
+      message: `Action rejected: ${data.outcome.reason}`,
+    }
+  }
+
   const error = data?.error
   if (error && typeof error === 'object') {
     return {
@@ -34,53 +42,233 @@ const getSafeError = (data) => {
   }
 }
 
+const humanizeAction = (action) => ({
+  'gmail.search': 'Search Gmail',
+  'gmail.read': 'Read Gmail messages',
+  'gmail.draft': 'Create Gmail drafts',
+  'gmail.send': 'Send Gmail messages',
+  'gmail.draft.reply': 'Create Gmail reply drafts',
+  'gmail.send.reply': 'Send Gmail replies',
+  'gmail.search_then_reply': 'Search Gmail and draft a reply',
+  'gmail.search_then_draft_reply': 'Search Gmail and draft a reply',
+  'gmail.search_then_send_reply': 'Search Gmail and send a reply',
+  'calendar.create': 'Create calendar events',
+  'calendar.delete': 'Delete calendar events',
+  'meet.create': 'Create Google Meet meetings',
+}[action] || action)
+
 function AiIntentTestPage() {
   const [signedIn, setSignedIn] = useState(false)
   const [conversationId, setConversationId] = useState('manual-test-001')
   const [message, setMessage] = useState(defaultMessage)
   const [result, setResult] = useState(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [permissions, setPermissions] = useState([])
+  const [permissionMessage, setPermissionMessage] = useState('')
 
-  useEffect(() => observeAuthState((user) => setSignedIn(Boolean(user))), [])
+  const loadPermissions = useCallback(async () => {
+    const token = await getCurrentIdToken()
+    if (!token) return setPermissions([])
+    const response = await fetch(`${API_BASE_URL}/api/permissions`, { headers: { Authorization: `Bearer ${token}` } })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error('Unable to load permissions.')
+    setPermissions(Array.isArray(data.permissions) ? data.permissions : [])
+  }, [])
 
-  const submitIntent = async (event) => {
-    event.preventDefault()
+  useEffect(() => observeAuthState((user) => {
+    setSignedIn(Boolean(user))
+    if (!user) {
+      setPermissions([])
+      return
+    }
+    loadPermissions().catch(() => setPermissionMessage('Unable to load saved permissions.'))
+  }), [loadPermissions])
+
+  const executeAiAction = async (approval = undefined) => {
+    if (isSubmitting) return
     setIsSubmitting(true)
     setResult(null)
 
     try {
       const token = await getCurrentIdToken()
       if (!token) {
-        setResult({ status: 401, success: false, errorType: 'Authentication failed', error: { code: 'AUTHENTICATION_FAILED', message: 'Authentication failed. Sign in to NOMI and try again.' } })
+        setResult({
+          status: 401,
+          success: false,
+          executionType: 'error',
+          errorType: 'Authentication failed',
+          error: { code: 'AUTHENTICATION_FAILED', message: 'Authentication failed. Sign in to NOMI and try again.' },
+          rawResponse: null,
+        })
         return
       }
 
-      const response = await fetch(AI_INTENT_URL, {
+      const requestBody = {
+        conversationId,
+        message,
+        ...(approval ? { approval } : {}),
+      }
+
+      const response = await fetch(AI_EXECUTE_URL, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ conversationId, message }),
+        body: JSON.stringify(requestBody),
       })
+
       const data = await response.json().catch(() => ({}))
+      const safeData = sanitizeValue(data)
 
       if (response.ok) {
-        setResult({ status: response.status, success: true, intent: sanitizeValue(data.intent) })
+        const outcome = safeData?.outcome
+        if (outcome?.status === 'success') {
+          setResult({
+            status: response.status,
+            success: true,
+            executionType: 'success',
+            action: outcome.action,
+            result: outcome.result,
+            rawResponse: safeData,
+          })
+          loadPermissions().catch(() => setPermissionMessage('Action completed, but saved permissions could not be refreshed.'))
+          return
+        }
+
+        if (outcome?.status === 'approval_required') {
+          setResult({
+            status: response.status,
+            success: false,
+            executionType: 'approval_required',
+            action: outcome.action,
+            approvalMessage: `NOMI is asking to ${humanizeAction(outcome.action)}. This approval applies only to ${outcome.action}.`,
+            rawResponse: safeData,
+          })
+          return
+        }
+
+        if (outcome?.status === 'denied') {
+          setResult({
+            status: response.status,
+            success: false,
+            executionType: 'denied',
+            action: outcome.action,
+            message: `Action "${outcome.action}" was denied.`,
+            rawResponse: safeData,
+          })
+          return
+        }
+
+        if (outcome?.status === 'ambiguous_identity') {
+          setResult({
+            status: response.status,
+            success: false,
+            executionType: 'ambiguous_identity',
+            candidates: outcome.candidates,
+            message: 'Multiple matching email candidates found. Please refine your query.',
+            rawResponse: safeData,
+          })
+          return
+        }
+
+        if (outcome?.status === 'clarification') {
+          setResult({
+            status: response.status,
+            success: false,
+            executionType: 'clarification',
+            action: 'clarification',
+            message: outcome.message || outcome.prompt || 'Clarification needed.',
+            rawResponse: safeData,
+          })
+          return
+        }
+
+        if (outcome?.status === 'not_found') {
+          setResult({
+            status: response.status,
+            success: false,
+            executionType: 'not_found',
+            action: outcome.action,
+            message: outcome.message || 'No matching emails were found.',
+            rawResponse: safeData,
+          })
+          return
+        }
+
+        if (outcome?.status === 'invalid') {
+          setResult({
+            status: response.status,
+            success: false,
+            executionType: 'invalid',
+            reason: outcome.reason,
+            error: { code: 'INVALID_PROPOSAL', message: outcome.reason || 'The proposed action is invalid.' },
+            rawResponse: safeData,
+          })
+          return
+        }
+
+        setResult({
+          status: response.status,
+          success: Boolean(safeData?.success),
+          executionType: outcome?.status || 'unknown',
+          rawResponse: safeData,
+        })
         return
       }
 
-      const error = getSafeError(data)
+      const error = getSafeError(safeData)
       const errorType = response.status === 401
         ? 'Authentication failed'
         : response.status === 422
-          ? 'Validation error'
+          ? 'Validation or rejection error'
           : response.status === 503
             ? 'Provider error'
-            : 'Request failed'
-      setResult({ status: response.status, success: false, errorType, error })
+            : response.status === 400
+              ? 'Bad request'
+              : 'Request failed'
+
+      setResult({
+        status: response.status,
+        success: false,
+        executionType: 'error',
+        errorType,
+        error,
+        rawResponse: safeData,
+      })
     } catch {
-      setResult({ status: null, success: false, errorType: 'Request failed', error: { code: 'NETWORK_ERROR', message: 'Unable to reach the local API server.' } })
+      setResult({
+        status: null,
+        success: false,
+        executionType: 'error',
+        errorType: 'Request failed',
+        error: { code: 'NETWORK_ERROR', message: 'Unable to reach the local API server.' },
+        rawResponse: null,
+      })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const handleSubmit = (event) => {
+    event.preventDefault()
+    executeAiAction()
+  }
+
+  const revokePermission = async ({ provider, action }) => {
+    if (isSubmitting) return
+    setIsSubmitting(true)
+    setPermissionMessage('')
+    try {
+      const token = await getCurrentIdToken()
+      const response = await fetch(`${API_BASE_URL}/api/permissions/${encodeURIComponent(provider)}/${encodeURIComponent(action)}`, {
+        method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!response.ok) throw new Error('Unable to revoke permission.')
+      await loadPermissions()
+      setPermissionMessage(`${humanizeAction(action)} will require approval next time.`)
+    } catch {
+      setPermissionMessage('Unable to revoke permission.')
     } finally {
       setIsSubmitting(false)
     }
@@ -88,13 +276,13 @@ function AiIntentTestPage() {
 
   return (
     <main className="ai-intent-test-page">
-      <h1>AI intent test harness</h1>
-      <p className="ai-intent-test-warning">Temporary development-only page. Remove after manual testing.</p>
-      <p>This page only submits an intent request. It does not execute Gmail actions.</p>
+      <h1>AI execution test harness</h1>
+      <p className="ai-intent-test-warning">Temporary development-only page for manual AI action execution testing.</p>
+      <p>This page submits requests to /api/ai/execute to test end-to-end execution and approval flows.</p>
 
       {!signedIn && <p className="ai-intent-test-alert" role="status">Sign in to NOMI before submitting a test request.</p>}
 
-      <form onSubmit={submitIntent}>
+      <form onSubmit={handleSubmit}>
         <label htmlFor="conversation-id">Conversation ID</label>
         <input
           id="conversation-id"
@@ -116,7 +304,7 @@ function AiIntentTestPage() {
         />
 
         <button type="submit" disabled={!signedIn || isSubmitting}>
-          {isSubmitting ? 'Submitting…' : 'Test /api/ai/intent'}
+          {isSubmitting ? 'Executing…' : 'Execute /api/ai/execute'}
         </button>
       </form>
 
@@ -125,17 +313,97 @@ function AiIntentTestPage() {
           <h2>Response</h2>
           <p>HTTP status: {result.status ?? 'No response'}</p>
           <p>Result: {result.success ? 'Success' : 'Failure'}</p>
-          {result.success ? (
-            <>
-              <h3>Returned intent</h3>
-              <pre>{JSON.stringify(result.intent, null, 2)}</pre>
-            </>
-          ) : (
-            <>
+
+          {result.executionType === 'success' && (
+            <div>
+              <h3>Execution result ({result.action})</h3>
+              <pre>{JSON.stringify(result.result, null, 2)}</pre>
+            </div>
+          )}
+
+          {result.executionType === 'approval_required' && (
+            <div className="ai-intent-test-alert" role="alert" style={{ marginTop: '12px' }}>
+              <h3>Approval required</h3>
+              <p>{result.approvalMessage}</p>
+              <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={() => executeAiAction('allow_once')}
+                >
+                  {isSubmitting ? 'Submitting…' : 'Allow once'}
+                </button>
+                <button type="button" disabled={isSubmitting} onClick={() => executeAiAction('always_allow')}>
+                  Always allow
+                </button>
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={() => executeAiAction('deny')}
+                >
+                  {isSubmitting ? 'Submitting…' : 'Deny'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {result.executionType === 'denied' && (
+            <div className="ai-intent-test-alert" role="status" style={{ marginTop: '12px' }}>
+              <h3>Action denied</h3>
+              <p>{result.message}</p>
+            </div>
+          )}
+
+          {result.executionType === 'clarification' && (
+            <div className="ai-intent-test-alert" role="status" style={{ marginTop: '12px' }}>
+              <h3>Clarification needed</h3>
+              <p>{result.message}</p>
+            </div>
+          )}
+
+          {result.executionType === 'not_found' && (
+            <div className="ai-intent-test-alert" role="status" style={{ marginTop: '12px' }}>
+              <h3>No matching emails found</h3>
+              <p>{result.message}</p>
+            </div>
+          )}
+
+          {result.executionType === 'ambiguous_identity' && (
+            <div className="ai-intent-test-alert" role="status" style={{ marginTop: '12px' }}>
+              <h3>Ambiguous identity</h3>
+              <p>{result.message}</p>
+              <pre>{JSON.stringify(result.candidates, null, 2)}</pre>
+            </div>
+          )}
+
+          {result.executionType === 'error' && (
+            <div>
               <h3>Safe error response</h3>
               <p>{result.errorType}</p>
               <pre>{JSON.stringify(result.error, null, 2)}</pre>
-            </>
+            </div>
+          )}
+
+          <details style={{ marginTop: '16px' }} open>
+            <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Raw response (Debug)</summary>
+            <pre>{JSON.stringify(result.rawResponse, null, 2)}</pre>
+          </details>
+        </section>
+      )}
+      {signedIn && (
+        <section className="ai-intent-test-permissions" aria-label="Permissions settings">
+          <h2>Permissions</h2>
+          <p>Always-allowed capabilities are specific to the action shown. Removing one does not disconnect Google or affect other permissions.</p>
+          {permissionMessage && <p role="status">{permissionMessage}</p>}
+          {permissions.length === 0 ? <p>No always-allowed permissions.</p> : (
+            <ul>
+              {permissions.map((permission) => (
+                <li key={`${permission.provider}:${permission.action}`}>
+                  <span>{humanizeAction(permission.action)} <small>({permission.action}) — always allowed</small></span>
+                  <button type="button" disabled={isSubmitting} onClick={() => revokePermission(permission)}>Remove</button>
+                </li>
+              ))}
+            </ul>
           )}
         </section>
       )}

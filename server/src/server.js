@@ -10,6 +10,7 @@ const googleIntegration = require("./services/integrations/googleIntegration");
 const googleIntegrationRoutes = require("./routes/googleIntegrationRoutes");
 const { createAIIntentRouter } = require("./routes/aiIntentRoutes");
 const { createAIActionRouter } = require("./routes/aiActionRoutes");
+const { createPermissionRouter } = require("./routes/permissionRoutes");
 
 const app = express();
 
@@ -18,6 +19,7 @@ app.use(express.json({ limit: "16kb" }));
 app.use("/api/integrations/google", googleIntegrationRoutes);
 app.use("/api/ai", createAIIntentRouter());
 app.use("/api/ai", createAIActionRouter());
+app.use("/api/permissions", createPermissionRouter());
 
 // Providers self-describe their capabilities so action orchestration stays provider-agnostic.
 registerIntegration(googleIntegration);
