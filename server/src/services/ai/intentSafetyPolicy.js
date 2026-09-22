@@ -22,10 +22,13 @@ const isExplicitSearchOrReadRequest = (userRequest) => typeof userRequest === "s
 const isPronounOrMissingTargetRequest = (userRequest) => typeof userRequest === "string"
   && !hasEmbeddedInstruction(userRequest)
   && (PRONOUN_TARGET.test(userRequest) || COMPOSE_OR_REPLY.test(userRequest));
+const hasNamedReplyTarget = (userRequest) => typeof userRequest === "string"
+  && /\b(?:reply|respond)\s+to\s+[A-Za-z][A-Za-z .'-]{0,80}(?:\s+(?:and|saying|telling|that)|[.!?,]|$)/i.test(userRequest);
 
 const requiresTargetClarification = (userRequest, trustedGmailMessageIds = []) => {
   if (typeof userRequest !== "string" || hasEmbeddedInstruction(userRequest)) return false;
   if (Array.isArray(trustedGmailMessageIds) && trustedGmailMessageIds.length > 0) return false;
+  if (hasNamedReplyTarget(userRequest)) return false;
   if (isExplicitSearchOrReadRequest(userRequest)) return false;
   return isPronounOrMissingTargetRequest(userRequest);
 };
@@ -54,6 +57,7 @@ module.exports = {
   hasEmbeddedInstruction,
   isExplicitSearchOrReadRequest,
   isPronounOrMissingTargetRequest,
+  hasNamedReplyTarget,
   requiresTargetClarification,
   unsupportedRequestReason,
   untrustedRequestedMessageId,

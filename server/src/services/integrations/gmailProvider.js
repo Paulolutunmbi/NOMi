@@ -84,16 +84,21 @@ const addressFromHeader = (value) => {
 };
 const senderFromHeader = (value) => {
   const raw = text(value);
+  if (!raw) return { name: null, email: null };
   const email = addressFromHeader(raw);
   if (!email) return { name: raw || null, email: null };
   const name = text(raw.replace(/<[^>]*>/g, "").replace(/^\s*['\"]|['\"]\s*$/g, "")) || null;
-  return { name, email };
+  return { name: name === email ? null : name, email };
 };
-const normalizeSearchMessage = (message) => ({ ...normalizeMessage(message), from: senderFromHeader(header(message, "From")) });
+const normalizeSearchMessage = (message) => {
+  const normalized = normalizeMessage(message);
+  const rawFrom = header(message, "From") || normalized.sender;
+  return { ...normalized, from: senderFromHeader(rawFrom) };
+};
 
 const createGmailProvider = ({ gmailFactory } = {}) => {
   const clientFor = (auth) => (gmailFactory ? gmailFactory(auth) : require("googleapis").google.gmail({ version: "v1", auth }));
-  const getMessage = async (gmail, id, format, metadataHeaders) => {
+  const getMessage = async (gmail, id, format = "full", metadataHeaders) => {
     try { return (await gmail.users.messages.get({ userId: "me", id, format, ...(metadataHeaders ? { metadataHeaders } : {}) })).data; }
     catch (error) { throw normalizeGoogleError(error, { messageNotFound: true }); }
   };
@@ -108,7 +113,7 @@ const createGmailProvider = ({ gmailFactory } = {}) => {
         if (!Number.isInteger(requested) || requested < 1) throw safeError("gmail_invalid_request", "maxResults must be between 1 and 50");
         const maxResults = Math.min(requested, MAX_RESULTS);
         const listed = await gmail.users.messages.list({ userId: "me", q: query, maxResults });
-        const records = await Promise.all((listed.data.messages || []).slice(0, maxResults).map(({ id }) => getMessage(gmail, id, "metadata", ["From", "To", "Subject", "Date"])));
+        const records = await Promise.all((listed.data.messages || []).slice(0, maxResults).map(({ id }) => getMessage(gmail, id, "full")));
         return { messages: records.map(normalizeSearchMessage), auditMetadata: { count: records.length } };
       }
       if (action === "gmail.read") {

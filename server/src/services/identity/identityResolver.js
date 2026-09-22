@@ -1,6 +1,6 @@
 const normalize = (value) => String(value || "").trim().toLowerCase();
 
-const resolveIdentity = ({ query, candidates, minimumConfidence = 0.85 }) => {
+const resolveIdentity = ({ query, candidates, minimumConfidence = 0.7 }) => {
   const normalizedQuery = normalize(query);
   const matches = candidates
     .map((candidate) => {

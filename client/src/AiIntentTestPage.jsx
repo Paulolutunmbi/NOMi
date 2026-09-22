@@ -166,7 +166,19 @@ function AiIntentTestPage() {
             success: false,
             executionType: 'ambiguous_identity',
             candidates: outcome.candidates,
-            message: 'Multiple matching email candidates found. Please refine your query.',
+            message: 'Multiple matching identities found. Tap one to select:',
+            rawResponse: safeData,
+          })
+          return
+        }
+
+        if (outcome?.status === 'ambiguous_message') {
+          setResult({
+            status: response.status,
+            success: false,
+            executionType: 'ambiguous_message',
+            candidates: outcome.candidates,
+            message: 'Multiple matching conversations found. Tap one to reply to:',
             rawResponse: safeData,
           })
           return
@@ -274,6 +286,12 @@ function AiIntentTestPage() {
     }
   }
 
+  const selectCandidate = (selectionId) => {
+    if (!selectionId || isSubmitting) return
+    setMessage(String(selectionId))
+    setTimeout(() => executeAiAction(), 0)
+  }
+
   return (
     <main className="ai-intent-test-page">
       <h1>AI execution test harness</h1>
@@ -368,11 +386,82 @@ function AiIntentTestPage() {
             </div>
           )}
 
-          {result.executionType === 'ambiguous_identity' && (
+          {(result.executionType === 'ambiguous_identity' || result.executionType === 'ambiguous_message') && (
             <div className="ai-intent-test-alert" role="status" style={{ marginTop: '12px' }}>
-              <h3>Ambiguous identity</h3>
+              <h3>{result.executionType === 'ambiguous_message' ? 'Which conversation?' : 'Which person do you mean?'}</h3>
               <p>{result.message}</p>
-              <pre>{JSON.stringify(result.candidates, null, 2)}</pre>
+              <div
+                role="list"
+                aria-label={result.executionType === 'ambiguous_message' ? 'Conversation candidates' : 'Identity candidates'}
+                style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '12px' }}
+              >
+                {Array.isArray(result.candidates) && result.candidates.map((candidate) => (
+                  <button
+                    key={candidate.selectionId || candidate.email || candidate.name}
+                    role="listitem"
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={() => selectCandidate(candidate.selectionId)}
+                    style={{
+                      textAlign: 'left',
+                      padding: '14px 16px',
+                      border: '1px solid #c9c9c9',
+                      borderRadius: '8px',
+                      background: isSubmitting ? '#f3f3f3' : '#ffffff',
+                      cursor: isSubmitting ? 'not-allowed' : 'pointer',
+                      transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isSubmitting) {
+                        e.currentTarget.style.borderColor = '#4f46e5'
+                        e.currentTarget.style.boxShadow = '0 0 0 3px rgba(79, 70, 229, 0.15)'
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = '#c9c9c9'
+                      e.currentTarget.style.boxShadow = 'none'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'start' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {result.executionType === 'ambiguous_message' && (
+                          <div style={{ fontWeight: 600, color: '#111827', fontSize: '15px' }}>
+                            {candidate.subject || 'No subject'}
+                          </div>
+                        )}
+                        <div style={{ marginTop: '4px', color: '#4b5563', fontSize: '13px' }}>
+                          {candidate.name
+                            ? (candidate.email ? `${candidate.name} <${candidate.email}>` : candidate.name)
+                            : candidate.email || 'Unknown sender'}
+                        </div>
+                        {candidate.date && (
+                          <div style={{ marginTop: '2px', color: '#6b7280', fontSize: '12px' }}>
+                            {candidate.date}
+                          </div>
+                        )}
+                        {candidate.snippet && (
+                          <div style={{
+                            marginTop: '6px', color: '#6b7280', fontSize: '12px',
+                            overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box',
+                            WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                          }}>
+                            {candidate.snippet}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{
+                        flexShrink: 0, fontSize: '12px', color: '#4f46e5', fontWeight: 600,
+                        padding: '4px 8px', borderRadius: '999px', background: '#eef2ff',
+                      }}>
+                        #{candidate.selectionId}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <p style={{ marginTop: '12px', color: '#6b7280', fontSize: '12px' }}>
+                Or reply with the number (e.g. "{result.candidates?.[0]?.selectionId || '1'}") in the message box above.
+              </p>
             </div>
           )}
 

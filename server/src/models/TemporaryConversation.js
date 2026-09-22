@@ -15,6 +15,20 @@ const temporaryConversationSchema = new mongoose.Schema({
   // Present only while a compound search-then-reply is awaiting a user choice.
   // IDs remain server-only and are selected strictly from gmailCandidates.
   pendingGmailReply: { type: mongoose.Schema.Types.Mixed, default: null },
+  // Server-trusted target for reply actions (messageId, threadId, email, subject, etc.)
+  // Never sourced from the client or model.
+  trustedTarget: { type: mongoose.Schema.Types.Mixed, default: null },
+  // Server-trusted draft context for "send it" style follow-ups.
+  // draftId, threadId, messageId, recipient, subject, action are persisted here.
+  // Never sourced from the client or model.
+  trustedDraft: { type: mongoose.Schema.Types.Mixed, default: null },
+  // Present when the user needs to resolve an identity or message ambiguity
+  // (not just compound search-then-reply). Stores the intended action/body so
+  // the next user message can resume against stored candidates without a fresh search.
+  pendingAmbiguity: { type: mongoose.Schema.Types.Mixed, default: null },
+  // The reply-disambiguation state machine. This is server-owned: public
+  // selection IDs resolve only against the candidates stored here.
+  pendingInteraction: { type: mongoose.Schema.Types.Mixed, default: null },
   placeholderMappings: { type: Map, of: mongoose.Schema.Types.Mixed, default: {} },
   expiresAt: { type: Date, required: true, index: { expires: 0 } },
 }, { timestamps: true });
