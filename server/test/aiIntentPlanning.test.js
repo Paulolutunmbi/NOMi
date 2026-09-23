@@ -2,7 +2,12 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createAIGateway } = require("../src/services/ai/aiGateway");
 const { buildIntentPrompt } = require("../src/services/ai/promptBoundary");
-const parameters = (values = {}) => ({ body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null, ...values });
+const parameters = (values = {}) => ({
+  body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null,
+  eventId: null, summary: null, description: null, location: null, startDateTime: null, endDateTime: null,
+  timeZone: null, attendees: null, timeMin: null, timeMax: null, addMeet: null,
+  ...values,
+});
 
 const gatewayFor = (intent) => createAIGateway({
   providerName: "groq",
@@ -61,7 +66,9 @@ test("the model policy makes Gmail action preconditions explicit without changin
   assert.match(prompt.system, /propose gmail\.search first/i);
   assert.match(prompt.system, /Do not execute that search/i);
   assert.match(prompt.system, /Identity resolution remains outside the model/i);
-  assert.deepEqual(prompt.trustedConversationContext, { gmailMessageIds: [] });
+  assert.deepEqual(prompt.trustedConversationContext.gmailMessageIds, []);
+  assert.deepEqual(prompt.trustedConversationContext.calendarEventIds, []);
+  assert.equal(typeof prompt.trustedConversationContext.serverTime, "string");
 });
 
 test("reply proposals require a trusted target and unknown targets return clarification", async () => {

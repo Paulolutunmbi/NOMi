@@ -5,6 +5,10 @@ const ACTIONS = {
   "gmail.send": { required: ["recipient", "body"], allowed: ["recipient", "subject", "body"] },
   "gmail.draft.reply": { required: ["messageId", "body"], allowed: ["messageId", "body", "subject"] },
   "gmail.send.reply": { required: ["messageId", "body"], allowed: ["messageId", "body", "subject"] },
+  // Content-only edit of the currently trusted draft ("make it more casual").
+  // The server supplies the trusted draftId/thread/recipient from
+  // conversation state; the model may only propose a revised body.
+  "gmail.draft.edit": { required: ["body"], allowed: ["body"] },
   "clarification": { required: ["body"], allowed: ["body"] },
   // Compound search-then-reply intents. The model supplies query + body only.
   // messageId, recipient, and subject must remain null — the orchestrator
@@ -12,8 +16,20 @@ const ACTIONS = {
   "gmail.search_then_reply": { required: ["query", "body"], allowed: ["query", "body", "maxResults"] },
   "gmail.search_then_draft_reply": { required: ["query", "body"], allowed: ["query", "body", "maxResults"] },
   "gmail.search_then_send_reply": { required: ["query", "body"], allowed: ["query", "body", "maxResults"] },
+  // Calendar actions follow the same trust boundary as Gmail: eventId is
+  // never accepted unless it is already a server-trusted ID from a prior
+  // calendar.search/read in this conversation (see trustedCalendarEventIds).
+  "calendar.search": { required: [], allowed: ["query", "timeMin", "timeMax", "maxResults"] },
+  "calendar.read": { required: ["eventId"], allowed: ["eventId"] },
+  "calendar.freebusy": { required: ["timeMin", "timeMax"], allowed: ["timeMin", "timeMax"] },
+  "calendar.create": { required: ["summary", "startDateTime", "endDateTime"], allowed: ["summary", "description", "location", "startDateTime", "endDateTime", "timeZone", "attendees", "addMeet"] },
+  "calendar.update": { required: ["eventId"], allowed: ["eventId", "summary", "description", "location", "startDateTime", "endDateTime", "timeZone", "attendees"] },
+  "calendar.delete": { required: ["eventId"], allowed: ["eventId"] },
 };
-const SCHEMA_PARAMETERS = ["body", "maxResults", "messageId", "query", "recipient", "subject"];
+const SCHEMA_PARAMETERS = [
+  "body", "maxResults", "messageId", "query", "recipient", "subject",
+  "eventId", "summary", "description", "location", "startDateTime", "endDateTime", "timeZone", "attendees", "timeMin", "timeMax", "addMeet",
+];
 const SAFE_STRING = (value, max = 10000) => typeof value === "string" && value.trim().length > 0 && value.length <= max;
 const EMAIL = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i;
 const EMAIL_PLACEHOLDER = /^\[EMAIL_\d+\]$/;
@@ -24,6 +40,8 @@ const SECRET_KEYS = /token|credential|secret|authorization|api.?key|password|bea
 const PROVIDER_ID_LOOKALIKE = /(?:^|[\s<>])(?:[A-Za-z0-9_-]{16,}|[0-9a-fA-F]{12,})(?:$|[\s<>])/;
 const MAX_SUBJECT_LENGTH = 500;
 const MIN_SUBJECT_LENGTH = 1;
+const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/;
+const CALENDAR_EVENT_ACTIONS = new Set(["calendar.read", "calendar.update", "calendar.delete"]);
 
 // These are opaque model-facing markers, not aliases for an address. They
 // become an address only at the authenticated execution boundary.
@@ -62,7 +80,7 @@ const generateSubjectFromBody = (body) => {
   return truncated || "Message";
 };
 
-const validateIntent = (intent, { trustedGmailMessageIds = [], recipientPlaceholders = [] } = {}) => {
+const validateIntent = (intent, { trustedGmailMessageIds = [], trustedCalendarEventIds = [], recipientPlaceholders = [] } = {}) => {
   if (!intent || typeof intent !== "object" || Array.isArray(intent)) return { valid: false, reason: "intent_must_be_an_object" };
   if (Object.keys(intent).some((key) => !["action", "parameters"].includes(key))) return { valid: false, reason: "unexpected_intent_field" };
   if (!ACTIONS[intent.action]) return { valid: false, reason: "unsupported_action" };
@@ -98,7 +116,34 @@ const validateIntent = (intent, { trustedGmailMessageIds = [], recipientPlacehol
   if (REPLY_ACTIONS.has(intent.action) && intent.parameters.subject !== null) {
     return { valid: false, reason: "reply_subject_must_be_null" };
   }
+  if (CALENDAR_EVENT_ACTIONS.has(intent.action) && !trustedCalendarEventIds.includes(intent.parameters.eventId)) {
+    return { valid: false, reason: "untrusted_or_unknown_event_id" };
+  }
+  if (["calendar.search", "calendar.freebusy", "calendar.create", "calendar.update"].includes(intent.action)) {
+    for (const key of ["startDateTime", "endDateTime", "timeMin", "timeMax"]) {
+      const value = intent.parameters[key];
+      if (value !== null && value !== undefined && !ISO_DATETIME.test(String(value).trim())) return { valid: false, reason: `invalid_${key}` };
+    }
+  }
+  if (["calendar.create", "calendar.update"].includes(intent.action) && intent.parameters.attendees !== null) {
+    const { attendees } = intent.parameters;
+    if (typeof attendees !== "string" || !attendees.trim()) return { valid: false, reason: "invalid_attendees" };
+    const tokens = attendees.split(/[,;]/).map((token) => token.trim()).filter(Boolean);
+    if (!tokens.length) return { valid: false, reason: "invalid_attendees" };
+    for (const token of tokens) {
+      // Same trust rule as Gmail's recipient field: a literal address is only
+      // valid if it's an explicit privacy placeholder the user actually typed,
+      // or the self marker. The model may never invent an attendee address.
+      if (isSelfRecipientMarker(token)) continue;
+      if (EMAIL_PLACEHOLDER.test(token)) { if (!recipientPlaceholders.includes(token)) return { valid: false, reason: "untrusted_recipient_placeholder" }; continue; }
+      if (EMAIL.test(token)) return { valid: false, reason: "untrusted_recipient_email" };
+      return { valid: false, reason: "unresolved_recipient" };
+    }
+  }
+  if (intent.action === "calendar.create" && intent.parameters.addMeet !== null && typeof intent.parameters.addMeet !== "boolean") {
+    return { valid: false, reason: "invalid_add_meet" };
+  }
   return { valid: true, intent: { action: intent.action, parameters: { ...intent.parameters } } };
 };
 
-module.exports = { ACTIONS, REPLY_ACTIONS, SELF_RECIPIENT_MARKERS, isSelfRecipientMarker, validateIntent, validateSubject, generateSubjectFromBody };
+module.exports = { ACTIONS, REPLY_ACTIONS, CALENDAR_EVENT_ACTIONS, SELF_RECIPIENT_MARKERS, isSelfRecipientMarker, validateIntent, validateSubject, generateSubjectFromBody };

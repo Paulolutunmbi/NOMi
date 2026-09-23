@@ -10,7 +10,12 @@ const MESSAGE_ACTIONS = new Set(["gmail.read", ...REPLY_ACTIONS]);
 // Compound intents: model proposes search query + reply body; the orchestrator
 // resolves the trusted target server-side and then executes the reply.
 const SEARCH_THEN_REPLY_ACTIONS = new Set(["gmail.search_then_reply", "gmail.search_then_draft_reply", "gmail.search_then_send_reply"]);
-const SUPPORTED_ACTIONS = new Set(["gmail.search", "gmail.read", "gmail.draft", "gmail.send", "clarification", ...REPLY_ACTIONS, ...SEARCH_THEN_REPLY_ACTIONS]);
+const CALENDAR_ACTIONS = new Set(["calendar.search", "calendar.read", "calendar.freebusy", "calendar.create", "calendar.update", "calendar.delete"]);
+// Same trust boundary as Gmail's MESSAGE_ACTIONS: these actions require an
+// eventId that is already server-trusted (from a prior calendar.search/read
+// in this conversation), never one invented by the client or the model.
+const CALENDAR_EVENT_ACTIONS = new Set(["calendar.read", "calendar.update", "calendar.delete"]);
+const SUPPORTED_ACTIONS = new Set(["gmail.search", "gmail.read", "gmail.draft", "gmail.send", "gmail.draft.edit", "clarification", ...REPLY_ACTIONS, ...SEARCH_THEN_REPLY_ACTIONS, ...CALENDAR_ACTIONS]);
 const EMAIL = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i;
 const SECRET_KEYS = /token|credential|secret|authorization|api.?key|password/i;
 const PRONOUN_MATCH = /\b(him|her|them|that\s+person|this\s+person|the\s+sender)\b/i;
@@ -87,13 +92,20 @@ const publicCandidate = (candidate, index) => {
     snippet: typeof snippet === "string" && snippet.trim() ? cleanText(snippet, 500) : null,
   };
 };
+// Identity candidates answer "which person/account do you mean?" — they must
+// NEVER carry message-level detail (subject/date/snippet/Gmail IDs). Exposing
+// those here would leak the wrong Gmail account's message metadata alongside
+// an identity representative picked from a mixed candidate list.
 const publicIdentityCandidate = (candidate, index) => ({
   selectionId: typeof index === "number" ? String(index + 1) : null,
   name: candidate?.displayName || candidate?.name || null,
   email: candidate?.email || null,
-  date: candidate?.date || null,
-  snippet: typeof candidate?.snippet === "string" && candidate.snippet.trim() ? cleanText(candidate.snippet, 500) : null,
 });
+// Chooses the correct public shape for a given ambiguity type so identity
+// candidates never leak message metadata and message candidates keep it.
+const formatCandidates = (candidates, ambiguityType) => (Array.isArray(candidates) ? candidates : [])
+  .map((c, i) => (ambiguityType === "identity" ? publicIdentityCandidate(c, i) : publicCandidate(c, i)));
+const statusForAmbiguity = (ambiguityType) => (ambiguityType === "message" ? "ambiguous_message" : "ambiguous_identity");
 // Identity key: two candidates share the same identity if their normalized email
 // matches, or (if emails are absent) their display names match.
 const identityKey = (candidate) => {
@@ -173,6 +185,54 @@ const payloadFor = (intent) => {
     ? parameters.subject
     : generateSubjectFromBody(parameters.body);
   return { recipient: parameters.recipient, subject: finalSubject, body: parameters.body };
+};
+// Calendar events never expose their eventId to the client — only a
+// per-response selectionId, mirroring publicIdentityCandidate/publicCandidate.
+const displayEventSummary = (summary) => (typeof summary === "string" && summary.trim() ? summary.trim() : "Untitled event");
+const publicCalendarCandidate = (event, index) => ({
+  selectionId: typeof index === "number" ? String(index + 1) : null,
+  summary: displayEventSummary(event?.summary),
+  start: event?.start || null,
+  end: event?.end || null,
+  location: event?.location || null,
+});
+const calendarPayloadFor = (intent) => {
+  const { action, parameters: p } = intent;
+  if (action === "calendar.search") return { query: p.query || undefined, timeMin: p.timeMin || undefined, timeMax: p.timeMax || undefined, maxResults: p.maxResults || undefined };
+  if (action === "calendar.freebusy") return { timeMin: p.timeMin, timeMax: p.timeMax };
+  if (action === "calendar.read" || action === "calendar.delete") return { eventId: p.eventId };
+  if (action === "calendar.create") {
+    return { summary: p.summary, description: p.description || undefined, location: p.location || undefined,
+      startDateTime: p.startDateTime, endDateTime: p.endDateTime, timeZone: p.timeZone || undefined,
+      attendees: p.attendees || undefined, addMeet: !!p.addMeet };
+  }
+  // calendar.update — only forward fields the model actually set (null means "unchanged").
+  return { eventId: p.eventId,
+    ...(p.summary !== null ? { summary: p.summary } : {}), ...(p.description !== null ? { description: p.description } : {}),
+    ...(p.location !== null ? { location: p.location } : {}), ...(p.startDateTime !== null ? { startDateTime: p.startDateTime } : {}),
+    ...(p.endDateTime !== null ? { endDateTime: p.endDateTime } : {}), ...(p.timeZone !== null ? { timeZone: p.timeZone } : {}),
+    ...(p.attendees !== null ? { attendees: p.attendees } : {}) };
+};
+// Same execution-boundary recheck Gmail applies to recipients (lines below,
+// NEW_MESSAGE_ACTIONS): a self-marker resolves only to the authenticated
+// user's own address; any other literal address must already have appeared
+// verbatim in the user's own message text. The model can never invent one.
+const resolveAttendees = (attendeesValue, { message, user }) => {
+  if (attendeesValue === undefined || attendeesValue === null) return { ok: true, attendees: undefined };
+  const tokens = String(attendeesValue).split(/[,;]/).map((token) => token.trim()).filter(Boolean);
+  const resolved = [];
+  for (const token of tokens) {
+    if (isSelfRecipient({ recipient: token })) {
+      const userEmail = typeof user?.email === "string" && EMAIL.test(user.email.trim()) ? user.email.trim().toLowerCase() : null;
+      if (!userEmail) return { ok: false };
+      resolved.push(userEmail);
+    } else if (EMAIL.test(token) && typeof message === "string" && message.toLowerCase().includes(token.toLowerCase())) {
+      resolved.push(token);
+    } else {
+      return { ok: false };
+    }
+  }
+  return { ok: true, attendees: resolved.join(", ") };
 };
 // Map a compound search_then_* action to the corresponding reply action.
 const replyActionFor = (compoundAction) => {
@@ -296,9 +356,13 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     if (!pending || !["identity_selection", "conversation_selection"].includes(pending.stage)) return null;
     const source = pending.stage === "identity_selection" ? pending.identityCandidates : pending.conversationCandidates;
     const selection = selectPendingCandidate(message, Array.isArray(source) ? source : []);
-    if (selection.status !== "resolved") return { status: "clarification", action: pending.action,
-      candidates: (source || []).map((c, i) => publicCandidate(c, i)),
-      prompt: pending.stage === "identity_selection" ? "Please choose one of the matching accounts." : "Please choose one of the conversations." };
+    if (selection.status !== "resolved") {
+      const ambiguityType = pending.stage === "identity_selection" ? "identity" : "message";
+      const hasRealAmbiguity = Array.isArray(source) && source.length > 1;
+      return { status: hasRealAmbiguity ? statusForAmbiguity(ambiguityType) : "clarification", action: pending.action,
+        candidates: formatCandidates(source, ambiguityType),
+        prompt: pending.stage === "identity_selection" ? "Please choose one of the matching accounts." : "Please choose one of the conversations." };
+    }
     const selected = selection.identity;
     if (pending.stage === "identity_selection") {
       if (!EMAIL.test(selected.email || "")) return { status: "rejected", reason: "selected_identity_has_no_email" };
@@ -347,9 +411,9 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     if (selection.status === "ambiguous") {
       const displayedAmbiguityType = selection.ambiguityType || ambiguityType;
       return {
-        status: displayedAmbiguityType === "message" ? "ambiguous_message" : "ambiguous_identity",
+        status: statusForAmbiguity(displayedAmbiguityType),
         action: pending.action,
-        candidates: selection.candidates.map((c, i) => publicCandidate(c, i)),
+        candidates: formatCandidates(selection.candidates, displayedAmbiguityType),
         prompt: candidatePrompt(null, selection.candidates, {
           ambiguityType: selection.ambiguityType,
           identityDisplayName: selection.identityDisplayName,
@@ -358,10 +422,15 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       };
     }
     if (selection.status !== "resolved") {
+      // Only relabel as ambiguous_* when there's a genuine multi-way choice to
+      // re-present. A single leftover candidate plus an invalid selection is
+      // not "ambiguous" — there's nothing to disambiguate — so it stays a
+      // generic clarification re-prompt.
+      const hasRealAmbiguity = Array.isArray(sourceCandidates) && sourceCandidates.length > 1;
       return {
-        status: "clarification",
+        status: hasRealAmbiguity ? statusForAmbiguity(ambiguityType) : "clarification",
         action: pending.action,
-        candidates: candidates.map((c, i) => publicCandidate(c, i)),
+        candidates: formatCandidates(sourceCandidates, ambiguityType),
         prompt: candidatePrompt(null, sourceCandidates, { ambiguityType }),
       };
     }
@@ -393,9 +462,9 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     if (selection.status === "ambiguous") {
       const displayedAmbiguityType = selection.ambiguityType || ambiguityType;
       return {
-        status: displayedAmbiguityType === "message" ? "ambiguous_message" : "ambiguous_identity",
+        status: statusForAmbiguity(displayedAmbiguityType),
         action: pending.action,
-        candidates: selection.candidates.map((c, i) => publicCandidate(c, i)),
+        candidates: formatCandidates(selection.candidates, displayedAmbiguityType),
         prompt: candidatePrompt(null, selection.candidates, {
           ambiguityType: selection.ambiguityType,
           identityDisplayName: selection.identityDisplayName,
@@ -404,10 +473,11 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       };
     }
     if (selection.status !== "resolved") {
+      const hasRealAmbiguity = Array.isArray(sourceCandidates) && sourceCandidates.length > 1;
       return {
-        status: "clarification",
+        status: hasRealAmbiguity ? statusForAmbiguity(ambiguityType) : "clarification",
         action: pending.action,
-        candidates: candidates.map((c, i) => publicCandidate(c, i)),
+        candidates: formatCandidates(sourceCandidates, ambiguityType),
         prompt: candidatePrompt(null, sourceCandidates, { ambiguityType }),
       };
     }
@@ -453,6 +523,79 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       body: payload?.body || null,
     };
     await contextService.update({ userId: user._id, conversationId, trustedDraft: draftData }).catch(() => {});
+  };
+
+  // Calendar actions follow the identical trust pattern as Gmail: eventId is
+  // rechecked against server-trusted state, attendees are rechecked against
+  // the same self-marker/explicit-address rule as Gmail recipients, and
+  // eventId is never echoed back to the client (only a selectionId).
+  const executeCalendarAction = async ({ user, conversationId, message, intent, activeConversation, approval }) => {
+    if (CALENDAR_EVENT_ACTIONS.has(intent.action)
+      && !(activeConversation.calendarEventIds || []).includes(intent.parameters.eventId)) {
+      return { status: "rejected", reason: "untrusted_or_unknown_event_id" };
+    }
+    if (["calendar.create", "calendar.update"].includes(intent.action) && intent.parameters.attendees !== null) {
+      const resolved = resolveAttendees(intent.parameters.attendees, { message, user });
+      if (!resolved.ok) return { status: "rejected", reason: "untrusted_attendee_email" };
+      intent.parameters.attendees = resolved.attendees || null;
+    }
+    const target = CALENDAR_EVENT_ACTIONS.has(intent.action)
+      ? { type: "calendar_event", id: intent.parameters.eventId }
+      : { type: "calendar", id: null };
+    const execution = await actionExecutor({ user, provider: "google", action: intent.action, payload: calendarPayloadFor(intent), target, approval });
+    if (execution.status !== "success") return { status: execution.status, action: intent.action };
+
+    if (intent.action === "calendar.search") {
+      const events = Array.isArray(execution.result?.events) ? execution.result.events : [];
+      if (events.length) await contextService.update({ userId: user._id, conversationId, calendarEventIds: events.map((e) => e.id), calendarCandidates: events }).catch(() => {});
+      return { status: "success", action: intent.action, result: { events: events.map((e, i) => publicCalendarCandidate(e, i)), count: events.length } };
+    }
+    if (intent.action === "calendar.read" && execution.result?.event?.id) {
+      const event = execution.result.event;
+      const existingCandidates = Array.isArray(activeConversation.calendarCandidates) ? activeConversation.calendarCandidates : [];
+      const existingIds = Array.isArray(activeConversation.calendarEventIds) ? activeConversation.calendarEventIds : [];
+      await contextService.update({
+        userId: user._id, conversationId,
+        calendarEventIds: [...new Set([event.id, ...existingIds])].slice(0, 50),
+        calendarCandidates: [event, ...existingCandidates.filter((c) => c.id !== event.id)].slice(0, 50),
+      }).catch(() => {});
+    }
+    if (intent.action === "calendar.create" && execution.result?.event?.id) {
+      const event = execution.result.event;
+      const existingCandidates = Array.isArray(activeConversation.calendarCandidates) ? activeConversation.calendarCandidates : [];
+      const existingIds = Array.isArray(activeConversation.calendarEventIds) ? activeConversation.calendarEventIds : [];
+      await contextService.update({
+        userId: user._id, conversationId,
+        calendarEventIds: [...new Set([event.id, ...existingIds])].slice(0, 50),
+        calendarCandidates: [event, ...existingCandidates].slice(0, 50),
+      }).catch(() => {});
+    }
+    if (intent.action === "calendar.delete") {
+      // The event no longer exists — drop it from trusted state so it can't be referenced again.
+      const remainingCandidates = (activeConversation.calendarCandidates || []).filter((c) => c.id !== intent.parameters.eventId);
+      const remainingIds = (activeConversation.calendarEventIds || []).filter((id) => id !== intent.parameters.eventId);
+      await contextService.update({ userId: user._id, conversationId, calendarEventIds: remainingIds, calendarCandidates: remainingCandidates }).catch(() => {});
+    }
+    return { status: "success", action: intent.action, result: safeResult(execution.result) };
+  };
+
+  // Content-only revision of the currently trusted draft ("make it more
+  // casual"). The draftId, recipient/subject (new-message drafts) or original
+  // messageId (reply drafts) all come from server-trusted conversation state
+  // — the model supplies only the revised body text.
+  const executeDraftEdit = async ({ user, conversationId, intent, conversation, approval }) => {
+    const draft = conversation.trustedDraft;
+    if (!draft || !draft.draftId || !DRAFT_ACTIONS.has(draft.action)) {
+      return { status: "rejected", reason: "no_active_draft_to_edit" };
+    }
+    const payload = draft.action === "gmail.draft.reply"
+      ? { draftId: draft.draftId, body: intent.parameters.body, replyToMessageId: draft.messageId }
+      : { draftId: draft.draftId, body: intent.parameters.body, recipient: draft.recipient, subject: draft.subject, threadId: draft.threadId };
+    const target = { type: "gmail_message", id: draft.draftId };
+    const execution = await actionExecutor({ user, provider: "google", action: "gmail.draft.update", payload, target, approval });
+    if (execution.status !== "success") return { status: execution.status, action: "gmail.draft.edit" };
+    await contextService.update({ userId: user._id, conversationId, trustedDraft: { ...draft, body: intent.parameters.body } }).catch(() => {});
+    return { status: "success", action: "gmail.draft.edit", result: safeResult(execution.result) };
   };
 
   // "send it" / "send the draft" resolver. Only triggers when a server-trusted
@@ -553,9 +696,9 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
         },
       });
       return {
-        status: displayedAmbiguityType === "message" ? "ambiguous_message" : "ambiguous_identity",
+        status: statusForAmbiguity(displayedAmbiguityType),
         action: intent.action,
-        candidates: displayedCandidates.map((c, i) => publicCandidate(c, i)),
+        candidates: formatCandidates(displayedCandidates, displayedAmbiguityType),
         prompt: candidatePrompt(targetQuery, displayedCandidates, {
           ambiguityType: displayedAmbiguityType,
           identityDisplayName: resolution.identityDisplayName,
@@ -621,6 +764,10 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     if (!SUPPORTED_ACTIONS.has(proposal.action)) return { status: "rejected", reason: "unsupported_action" };
     const intent = { action: proposal.action, parameters: { ...proposal.parameters } };
 
+    if (CALENDAR_ACTIONS.has(intent.action)) {
+      return executeCalendarAction({ user, conversationId, message, intent, activeConversation, approval });
+    }
+
     // ── Compound search-then-reply flow ──────────────────────────────────────
     if (SEARCH_THEN_REPLY_ACTIONS.has(intent.action)) {
       return executeSearchThenReply({ user, conversationId, message, intent, activeConversation, approval });
@@ -634,6 +781,10 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
         message: clarificationText,
         prompt: clarificationText,
       };
+    }
+
+    if (intent.action === "gmail.draft.edit") {
+      return executeDraftEdit({ user, conversationId, intent, conversation: activeConversation, approval });
     }
 
     if (REPLY_ACTIONS.has(intent.action)) {
@@ -651,8 +802,8 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
           },
         });
         return {
-          status: displayedAmbiguityType === "message" ? "ambiguous_message" : "ambiguous_identity",
-          candidates: displayedCandidates.map((c, i) => publicCandidate(c, i)),
+          status: statusForAmbiguity(displayedAmbiguityType),
+          candidates: formatCandidates(displayedCandidates, displayedAmbiguityType),
           prompt: candidatePrompt(null, displayedCandidates, {
             ambiguityType: displayedAmbiguityType,
             identityDisplayName: resolution.identityDisplayName,

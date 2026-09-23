@@ -2,7 +2,12 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createAIGateway, supportedProviderNames } = require("../src/services/ai/aiGateway");
 const { validateIntent } = require("../src/services/ai/intentValidator");
-const parameters = (values = {}) => ({ body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null, ...values });
+const parameters = (values = {}) => ({
+  body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null,
+  eventId: null, summary: null, description: null, location: null, startDateTime: null, endDateTime: null,
+  timeZone: null, attendees: null, timeMin: null, timeMax: null, addMeet: null,
+  ...values,
+});
 
 test("accepts safe Gmail intents and rejects malformed or dangerous output", () => {
   assert.equal(validateIntent({ action: "gmail.search", parameters: parameters({ query: "from:John newer_than:7d" }) }).valid, true);

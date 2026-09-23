@@ -12,7 +12,7 @@ const makeExecutor = (permissions = new Map()) => {
       return { allowed: decision === "always_allow", requiresApproval: !decision, decision };
     },
     save: async ({ userId, provider, action, decision }) => permissions.set(`${userId}:${provider}:${action}`, decision),
-    getProvider: () => ({ capabilities: ["gmail.draft", "gmail.send", "gmail.draft.reply"], execute: async (input) => { executions.push(input); return { id: "safe" }; } }),
+    getProvider: () => ({ capabilities: ["gmail.draft", "gmail.send", "gmail.draft.reply", "calendar.create", "calendar.delete"], execute: async (input) => { executions.push(input); return { id: "safe" }; } }),
     audit: async () => {},
   });
   return { executor, permissions, executions };
@@ -50,6 +50,21 @@ test("gmail draft grants never authorize send or draft reply", async () => {
   const reply = await executor({ user: { _id: "u1" }, provider: "google", action: "gmail.draft.reply" });
   assert.equal(send.status, "approval_required");
   assert.equal(reply.status, "approval_required");
+});
+
+// Calendar mutations follow the identical per-action permission model as
+// Gmail — no special-casing, no provider-wide grant, and a grant for one
+// mutating action never authorizes a different one.
+test("calendar mutations require approval per-action, exactly like Gmail", async () => {
+  const { executor, permissions } = makeExecutor();
+  const create = await executor({ user: { _id: "u1" }, provider: "google", action: "calendar.create" });
+  assert.equal(create.status, "approval_required");
+  const approved = await executor({ user: { _id: "u1" }, provider: "google", action: "calendar.create", approval: "always_allow" });
+  assert.equal(approved.status, "success");
+  assert.equal(permissions.get("u1:google:calendar.create"), "always_allow");
+  // A grant for calendar.create does not authorize calendar.delete.
+  const del = await executor({ user: { _id: "u1" }, provider: "google", action: "calendar.delete" });
+  assert.equal(del.status, "approval_required");
 });
 
 test("revoking one always_allow permission leaves unrelated permissions and Google connection untouched", async (t) => {

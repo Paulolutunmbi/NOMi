@@ -76,7 +76,8 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
       await contextService.update({ userId: user._id, conversationId, placeholderMappings: safe.mappings });
       const selectedGateway = gateway || createAIGateway({ providerName: config.provider, adapters: config.provider === "groq" ? { groq: createGroqProvider({ config }) } : {} });
       const planned = await selectedGateway.generateIntent({ safeInput: safe.payload, placeholderMappings: safe.mappings,
-        trustedConversationContext: { gmailMessageIds: conversation.gmailMessageIds || [], chatHistory: conversation.messages || [] } });
+        trustedConversationContext: { gmailMessageIds: conversation.gmailMessageIds || [], calendarEventIds: conversation.calendarEventIds || [], chatHistory: conversation.messages || [],
+          currentDraftBody: conversation.trustedDraft?.body || null } });
       if (planned.status !== "proposed") return fail(res, planned.status === "invalid" ? 422 : 503, planned.status === "invalid" ? "AI_INTENT_INVALID" : "AI_PROVIDER_ERROR", "The request could not be safely executed.");
       const outcome = await actionOrchestrator.execute({ user, conversationId, message, conversation, proposal: restorePlaceholders(planned.intent, safe.mappings), approval });
       return recordOutcome(outcome);

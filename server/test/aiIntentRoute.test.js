@@ -3,7 +3,12 @@ const assert = require("node:assert/strict");
 const express = require("express");
 const { createAIIntentRouter } = require("../src/routes/aiIntentRoutes");
 
-const parameters = (values = {}) => ({ body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null, ...values });
+const parameters = (values = {}) => ({
+  body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null,
+  eventId: null, summary: null, description: null, location: null, startDateTime: null, endDateTime: null,
+  timeZone: null, attendees: null, timeMin: null, timeMax: null, addMeet: null,
+  ...values,
+});
 
 const makeHarness = async () => {
   const records = new Map();
@@ -47,8 +52,8 @@ test("AI route rejects unauthenticated and client-controlled security inputs", a
 test("AI route supplies only user-bound server context and does not execute Gmail", async (t) => {
   const harness = await makeHarness(); t.after(harness.close);
   assert.equal((await harness.request({ conversationId: "same", message: "read this" })).status, 200);
-  assert.deepEqual(harness.calls[0].trustedConversationContext, { gmailMessageIds: ["msg_123"] });
+  assert.deepEqual(harness.calls[0].trustedConversationContext, { gmailMessageIds: ["msg_123"], calendarEventIds: [] });
   assert.equal((await harness.request({ conversationId: "same", message: "read this" }, "valid-u2")).status, 200);
-  assert.deepEqual(harness.calls[1].trustedConversationContext, { gmailMessageIds: ["other_msg"] });
+  assert.deepEqual(harness.calls[1].trustedConversationContext, { gmailMessageIds: ["other_msg"], calendarEventIds: [] });
   assert.equal(typeof harness.calls[0].execute, "undefined");
 });

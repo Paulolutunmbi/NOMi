@@ -3,7 +3,12 @@ const assert = require("node:assert/strict");
 const { prepareAIInput } = require("../src/services/privacy/privacyService");
 const { buildIntentPrompt } = require("../src/services/ai/promptBoundary");
 const { validateIntent } = require("../src/services/ai/intentValidator");
-const parameters = (values = {}) => ({ body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null, ...values });
+const parameters = (values = {}) => ({
+  body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null,
+  eventId: null, summary: null, description: null, location: null, startDateTime: null, endDateTime: null,
+  timeZone: null, attendees: null, timeMin: null, timeMax: null, addMeet: null,
+  ...values,
+});
 
 test("protected data is redacted but ordinary names remain visible", () => {
   const safe = prepareAIInput({ userRequest: "Send John an email to john@example.com. Call +234 801 234 5678. secret=abcdefghi. Card 4111 1111 1111 1111" });

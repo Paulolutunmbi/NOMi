@@ -29,6 +29,11 @@ const temporaryConversationSchema = new mongoose.Schema({
   // The reply-disambiguation state machine. This is server-owned: public
   // selection IDs resolve only against the candidates stored here.
   pendingInteraction: { type: mongoose.Schema.Types.Mixed, default: null },
+  // Same trust pattern as gmailMessageIds/gmailCandidates, for Calendar:
+  // populated only by server-side calendar.search/read results, and required
+  // before calendar.read/update/delete may reference an eventId.
+  calendarEventIds: { type: [String], default: [] },
+  calendarCandidates: { type: [mongoose.Schema.Types.Mixed], default: [] },
   placeholderMappings: { type: Map, of: mongoose.Schema.Types.Mixed, default: {} },
   expiresAt: { type: Date, required: true, index: { expires: 0 } },
 }, { timestamps: true });

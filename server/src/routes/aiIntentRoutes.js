@@ -36,7 +36,7 @@ const createAIIntentRouter = ({ gateway, contextService = createConversationCont
       const result = await selectedGateway.generateIntent({
         safeInput: safe.payload,
         placeholderMappings: safe.mappings,
-        trustedConversationContext: { gmailMessageIds: conversation.gmailMessageIds || [] },
+        trustedConversationContext: { gmailMessageIds: conversation.gmailMessageIds || [], calendarEventIds: conversation.calendarEventIds || [] },
       });
       if (result.status === "proposed") {
         const intent = restorePlaceholders(result.intent, safe.mappings);

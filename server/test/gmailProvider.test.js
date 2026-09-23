@@ -16,7 +16,10 @@ const fakeGmail = () => {
     list: async (input) => { calls.list.push(input); return { data: { messages: [{ id: "m1" }] } }; },
     get: async (input) => { calls.get.push(input); return { data: message(input.id) }; },
     send: async (input) => { calls.send.push(input); return { data: { id: "sent1", threadId: input.requestBody.threadId || "new-thread" } }; },
-  }, drafts: { create: async (input) => { calls.draft.push(input); return { data: { id: "draft1", message: { id: "dm1", threadId: input.requestBody.message.threadId || "new-thread" } } }; } } } };
+  }, drafts: {
+    create: async (input) => { calls.draft.push(input); return { data: { id: "draft1", message: { id: "dm1", threadId: input.requestBody.message.threadId || "new-thread" } } }; },
+    update: async (input) => { calls.draft.push(input); return { data: { id: input.id, message: { id: "dm1", threadId: input.requestBody.message.threadId || "existing-thread" } } }; },
+  } } };
   return { api, calls };
 };
 const providerFor = (fake) => createGmailProvider({ gmailFactory: () => fake.api });
@@ -69,6 +72,32 @@ test("reply actions use Gmail target metadata and never accept an AI recipient",
   assert.match(draftRaw, /To: aminat@example.com/); assert.doesNotMatch(draftRaw, /evil@example.com/);
   assert.match(draftRaw, /In-Reply-To: <original@example.com>/); assert.match(sentRaw, /References: <prior@example.com> <original@example.com>/);
   assert.equal(fake.calls.draft[0].requestBody.message.threadId, "t1"); assert.equal(sent.threadId, "t1"); assert.equal(draft.draftId, "draft1");
+});
+
+test("gmail.draft.update revises a new-message draft using server-trusted recipient/subject, not caller-supplied thread", async () => {
+  const fake = fakeGmail(); const provider = providerFor(fake);
+  const updated = await provider.execute({}, "gmail.draft.update", { draftId: "draft1", recipient: "to@example.com", subject: "Hi", body: "Revised casual body", threadId: "thread-1" });
+  assert.equal(fake.calls.draft[0].id, "draft1");
+  assert.match(raw(fake.calls.draft[0]), /To: to@example.com/);
+  assert.match(raw(fake.calls.draft[0]), /Revised casual body/);
+  assert.equal(updated.draftId, "draft1");
+});
+
+test("gmail.draft.update on a reply draft rebuilds thread/reply headers from the trusted original message, ignoring any caller-supplied subject", async () => {
+  const fake = fakeGmail(); const provider = providerFor(fake);
+  const updated = await provider.execute({}, "gmail.draft.update", { draftId: "draft1", body: "More casual now", replyToMessageId: "m1" });
+  const draftRaw = raw(fake.calls.draft[0]);
+  assert.match(draftRaw, /To: aminat@example.com/);
+  assert.match(draftRaw, /In-Reply-To: <original@example.com>/);
+  assert.match(draftRaw, /More casual now/);
+  assert.equal(fake.calls.draft[0].requestBody.message.threadId, "t1");
+  assert.equal(updated.threadId, "t1");
+});
+
+test("gmail.draft.update rejects without a draftId or a valid body", async () => {
+  const fake = fakeGmail(); const provider = providerFor(fake);
+  await assert.rejects(() => provider.execute({}, "gmail.draft.update", { body: "x" }), { code: "gmail_invalid_request" });
+  await assert.rejects(() => provider.execute({}, "gmail.draft.update", { draftId: "draft1" }), { code: "gmail_invalid_request" });
 });
 
 test("Gmail and credential failures have safe predictable codes", async () => {

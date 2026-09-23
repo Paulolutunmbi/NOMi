@@ -5,7 +5,12 @@ const { sanitizeAuditMetadata } = require("../src/services/actions/actionExecuto
 
 // Regression coverage for trusted compound-search selection.
 
-const params = (values = {}) => ({ body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null, ...values });
+const params = (values = {}) => ({
+  body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null,
+  eventId: null, summary: null, description: null, location: null, startDateTime: null, endDateTime: null,
+  timeZone: null, attendees: null, timeMin: null, timeMax: null, addMeet: null,
+  ...values,
+});
 const conversationService = (record = { gmailMessageIds: [], gmailCandidates: [], retrievedContext: [] }) => ({
   getActive: async () => record,
   create: async () => record,
@@ -304,6 +309,12 @@ test("pronoun references resolve safely to single candidate or return ambiguous 
   });
   assert.equal(ambiguousResult.status, "ambiguous_identity");
   assert.equal(ambiguousResult.candidates.length, 2);
+  // Regression: identity candidates must be selectionId/name/email ONLY —
+  // no subject/date/snippet/messageId, even for the pronoun ("reply to him")
+  // path that pulls candidates from mixed-sender gmailCandidates.
+  for (const candidate of ambiguousResult.candidates) {
+    assert.deepEqual(Object.keys(candidate).sort(), ["email", "name", "selectionId"]);
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1161,8 +1172,232 @@ test("conversation context normalizers clamp and reject unsafe fields", () => {
   });
   assert.ok(withSelectionList, "pendingAmbiguity with candidateSelectionList should be accepted");
   assert.equal(Array.isArray(withSelectionList.candidateSelectionList), true);
-  assert.equal(withSelectionList.candidateSelectionList.length, 2);
-  assert.equal(withSelectionList.candidateSelectionList[0].id, "msg-1");
-  assert.equal(withSelectionList.candidateSelectionList[0].threadId, "t1");
-  assert.equal(withSelectionList.candidateSelectionList[1].subject, null);
+});
+
+// Regression: an invalid/out-of-range selection against a genuine multi-way
+// pending list must re-present it as ambiguous_identity/ambiguous_message
+// (per API contract), not the generic "clarification" status — while a
+// single leftover candidate (nothing to actually disambiguate) still uses
+// plain "clarification".
+test("invalid selection against multiple pending identity candidates re-prompts as ambiguous_identity, not clarification", async () => {
+  const record = {
+    gmailMessageIds: [],
+    gmailCandidates: [],
+    pendingGmailReply: { action: "gmail.draft.reply", body: "Hello" },
+    pendingAmbiguity: {
+      action: "gmail.draft.reply",
+      body: "Hello",
+      ambiguityType: "identity",
+      candidateSelectionList: [
+        { id: "msg-a", displayName: "Paul A", email: "paul.a@example.com", subject: "Secret subject A" },
+        { id: "msg-b", displayName: "Paul B", email: "paul.b@example.com", subject: "Secret subject B" },
+      ],
+    },
+  };
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async () => ({ status: "success", result: {} }),
+  });
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "99", proposal: null });
+  assert.equal(result.status, "ambiguous_identity");
+  assert.equal(result.candidates.length, 2);
+  for (const candidate of result.candidates) {
+    assert.deepEqual(Object.keys(candidate).sort(), ["email", "name", "selectionId"]);
+    assert.equal(JSON.stringify(candidate).includes("Secret subject"), false);
+  }
+});
+
+// Section 11: "make it more casual" edits the trusted draft using the
+// server-trusted draftId/recipient/messageId — never anything AI-supplied.
+test("gmail.draft.edit revises the trusted new-message draft via gmail.draft.update", async () => {
+  const record = {
+    gmailMessageIds: [], gmailCandidates: [],
+    trustedDraft: { draftId: "draft1", threadId: null, messageId: null, recipient: "john@example.com", subject: "Greetings", action: "gmail.draft", body: "Hi John, formal body." },
+  };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async (input) => { calls.push(input); return { status: "success", result: { draftId: "draft1" } }; },
+  });
+  const result = await orchestrator.execute({
+    user, conversationId: "c", message: "make it more casual",
+    proposal: { action: "gmail.draft.edit", parameters: params({ body: "hey John, casual version!" }) },
+  });
+  assert.equal(result.status, "success");
+  assert.equal(calls[0].action, "gmail.draft.update");
+  assert.equal(calls[0].payload.draftId, "draft1");
+  assert.equal(calls[0].payload.recipient, "john@example.com");
+  assert.equal(calls[0].payload.body, "hey John, casual version!");
+  assert.equal(record.trustedDraft.body, "hey John, casual version!");
+});
+
+test("gmail.draft.edit on a reply draft passes the trusted original messageId, not a client/AI-supplied one", async () => {
+  const record = {
+    gmailMessageIds: [], gmailCandidates: [],
+    trustedDraft: { draftId: "draft-r1", threadId: "t1", messageId: "msg-paul", recipient: "paul@example.com", subject: "Re: Files", action: "gmail.draft.reply", body: "Formal reply." },
+  };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async (input) => { calls.push(input); return { status: "success", result: { draftId: "draft-r1" } }; },
+  });
+  const result = await orchestrator.execute({
+    user, conversationId: "c", message: "make it shorter",
+    // Even if a compromised/buggy client or model tried to smuggle a different
+    // messageId in, it must be ignored — only trustedDraft.messageId is used.
+    proposal: { action: "gmail.draft.edit", parameters: params({ body: "Short reply." }) },
+  });
+  assert.equal(result.status, "success");
+  assert.equal(calls[0].action, "gmail.draft.update");
+  assert.equal(calls[0].payload.replyToMessageId, "msg-paul");
+  assert.equal(Object.hasOwn(calls[0].payload, "recipient"), false);
+});
+
+test("gmail.draft.edit is rejected when there is no active trusted draft", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [] };
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async () => ({ status: "success", result: {} }),
+  });
+  const result = await orchestrator.execute({
+    user, conversationId: "c", message: "make it more casual",
+    proposal: { action: "gmail.draft.edit", parameters: params({ body: "casual!" }) },
+  });
+  assert.equal(result.status, "rejected");
+  assert.equal(result.reason, "no_active_draft_to_edit");
+});
+
+test("invalid selection against a single leftover candidate stays a plain clarification", async () => {
+  const record = {
+    gmailMessageIds: ["msg-paul1"],
+    gmailCandidates: [{ id: "msg-paul1", displayName: "Paul Smith", email: "paul@example.com" }],
+    pendingGmailReply: { action: "gmail.draft.reply", body: "Hello" },
+  };
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async () => ({ status: "success", result: {} }),
+  });
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "9", proposal: null });
+  assert.equal(result.status, "clarification");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Calendar action tests (Requirement 14): same trust boundary as Gmail —
+// eventId is never trusted from client/AI, and mutations require approval.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("calendar.search persists trusted eventIds/candidates and returns selectionId-only public events", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [] };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async (input) => {
+      calls.push(input);
+      return { status: "success", result: { events: [{ id: "evt-secret-1", summary: "Sync", start: "2026-10-01T15:00:00Z", end: "2026-10-01T15:30:00Z", location: null }] } };
+    },
+  });
+  const result = await orchestrator.execute({
+    user, conversationId: "c", message: "find my meetings tomorrow",
+    proposal: { action: "calendar.search", parameters: params({ query: "sync" }) },
+  });
+  assert.equal(result.status, "success");
+  assert.equal(result.result.events[0].selectionId, "1");
+  assert.equal(Object.hasOwn(result.result.events[0], "id"), false);
+  assert.equal(JSON.stringify(result).includes("evt-secret-1"), false);
+  assert.deepEqual(record.calendarEventIds, ["evt-secret-1"]);
+});
+
+test("calendar.read/update/delete reject an eventId that is not already server-trusted", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-trusted"], calendarCandidates: [{ id: "evt-trusted", summary: "Sync" }] };
+  let called = false;
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async () => { called = true; return { status: "success", result: {} }; },
+  });
+  for (const action of ["calendar.read", "calendar.update", "calendar.delete"]) {
+    const result = await orchestrator.execute({
+      user, conversationId: "c", message: "do it",
+      proposal: { action, parameters: params({ eventId: "forged-event-id", summary: action === "calendar.update" ? "Renamed" : null }) },
+    });
+    assert.equal(result.status, "rejected", action);
+    assert.equal(result.reason, "untrusted_or_unknown_event_id", action);
+  }
+  assert.equal(called, false);
+});
+
+test("calendar.update/delete succeed against a server-trusted eventId", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-trusted"], calendarCandidates: [{ id: "evt-trusted", summary: "Sync" }] };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async (input) => { calls.push(input); return { status: "success", result: { event: { id: "evt-trusted", summary: "Renamed" } } }; },
+  });
+  const result = await orchestrator.execute({
+    user, conversationId: "c", message: "rename it",
+    proposal: { action: "calendar.update", parameters: params({ eventId: "evt-trusted", summary: "Renamed" }) },
+  });
+  assert.equal(result.status, "success");
+  assert.equal(calls[0].payload.eventId, "evt-trusted");
+  assert.equal(calls[0].target.type, "calendar_event");
+});
+
+test("calendar.create only accepts an attendee address the user actually typed, never one invented by the model", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [] };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async (input) => { calls.push(input); return { status: "success", result: { event: { id: "new-evt", summary: "Kickoff" } } }; },
+  });
+  // The model invents an attendee address never mentioned by the user.
+  const invented = await orchestrator.execute({
+    user, conversationId: "c", message: "schedule a kickoff tomorrow at 3pm",
+    proposal: { action: "calendar.create", parameters: params({ summary: "Kickoff", startDateTime: "2026-10-05T15:00:00Z", endDateTime: "2026-10-05T15:30:00Z", attendees: "invented@attacker.com" }) },
+  });
+  assert.equal(invented.status, "rejected");
+  assert.equal(invented.reason, "untrusted_attendee_email");
+  assert.equal(calls.length, 0);
+
+  // The user explicitly typed the address in their own message — accepted.
+  const explicit = await orchestrator.execute({
+    user, conversationId: "c", message: "schedule a kickoff tomorrow at 3pm with paul@example.com",
+    proposal: { action: "calendar.create", parameters: params({ summary: "Kickoff", startDateTime: "2026-10-05T15:00:00Z", endDateTime: "2026-10-05T15:30:00Z", attendees: "paul@example.com" }) },
+  });
+  assert.equal(explicit.status, "success");
+  assert.equal(calls[0].payload.attendees, "paul@example.com");
+});
+
+test("calendar.create resolves the self-recipient marker to the authenticated user's own email, never the model's guess", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [] };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async (input) => { calls.push(input); return { status: "success", result: { event: { id: "new-evt", summary: "Focus block" } } }; },
+  });
+  const result = await orchestrator.execute({
+    user: { _id: "u1", email: "me@example.com" }, conversationId: "c", message: "block time for myself tomorrow at 9am",
+    proposal: { action: "calendar.create", parameters: params({ summary: "Focus block", startDateTime: "2026-10-05T09:00:00Z", endDateTime: "2026-10-05T10:00:00Z", attendees: "myself" }) },
+  });
+  assert.equal(result.status, "success");
+  assert.equal(calls[0].payload.attendees, "me@example.com");
+});
+
+test("calendar.delete removes the event from trusted state so it cannot be referenced again", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-trusted"], calendarCandidates: [{ id: "evt-trusted", summary: "Sync" }] };
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async () => ({ status: "success", result: { deleted: true } }),
+  });
+  const deleted = await orchestrator.execute({
+    user, conversationId: "c", message: "cancel it",
+    proposal: { action: "calendar.delete", parameters: params({ eventId: "evt-trusted" }) },
+  });
+  assert.equal(deleted.status, "success");
+  assert.deepEqual(record.calendarEventIds, []);
+
+  const reuse = await orchestrator.execute({
+    user, conversationId: "c", message: "cancel it again",
+    proposal: { action: "calendar.delete", parameters: params({ eventId: "evt-trusted" }) },
+  });
+  assert.equal(reuse.status, "rejected");
+  assert.equal(reuse.reason, "untrusted_or_unknown_event_id");
 });

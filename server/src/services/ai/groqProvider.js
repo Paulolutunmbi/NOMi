@@ -8,15 +8,29 @@ const INTENT_SCHEMA = {
     type: "object",
     additionalProperties: false,
     properties: {
-      action: { type: "string", enum: ["gmail.read", "gmail.search", "gmail.draft", "gmail.send", "gmail.draft.reply", "gmail.send.reply", "clarification", "gmail.search_then_reply", "gmail.search_then_draft_reply", "gmail.search_then_send_reply"] },
+      action: {
+        type: "string",
+        enum: [
+          "gmail.read", "gmail.search", "gmail.draft", "gmail.send", "gmail.draft.reply", "gmail.send.reply", "gmail.draft.edit", "clarification",
+          "gmail.search_then_reply", "gmail.search_then_draft_reply", "gmail.search_then_send_reply",
+          "calendar.search", "calendar.read", "calendar.freebusy", "calendar.create", "calendar.update", "calendar.delete",
+        ],
+      },
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
           messageId: { type: ["string", "null"] }, query: { type: ["string", "null"] }, maxResults: { type: ["integer", "null"] },
           recipient: { type: ["string", "null"] }, subject: { type: ["string", "null"] }, body: { type: ["string", "null"] },
+          eventId: { type: ["string", "null"] }, summary: { type: ["string", "null"] }, description: { type: ["string", "null"] },
+          location: { type: ["string", "null"] }, startDateTime: { type: ["string", "null"] }, endDateTime: { type: ["string", "null"] },
+          timeZone: { type: ["string", "null"] }, attendees: { type: ["string", "null"] }, timeMin: { type: ["string", "null"] },
+          timeMax: { type: ["string", "null"] }, addMeet: { type: ["boolean", "null"] },
         },
-        required: ["body", "maxResults", "messageId", "query", "recipient", "subject"],
+        required: [
+          "body", "maxResults", "messageId", "query", "recipient", "subject",
+          "eventId", "summary", "description", "location", "startDateTime", "endDateTime", "timeZone", "attendees", "timeMin", "timeMax", "addMeet",
+        ],
       },
     },
     required: ["action", "parameters"],

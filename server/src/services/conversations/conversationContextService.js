@@ -14,6 +14,18 @@ const normalizeGmailCandidates = (value) => (Array.isArray(value) ? value : [])
     date: typeof date === "string" ? date.slice(0, 100) : null,
     snippet: typeof snippet === "string" ? snippet.slice(0, 1000) : null,
   }));
+// Same trust pattern as gmailMessageIds/gmailCandidates, for Calendar.
+const normalizeCalendarEventIds = (value) => [...new Set((Array.isArray(value) ? value : [])
+  .filter((id) => typeof id === "string" && id.trim() && id.length <= 1024))].slice(0, 50);
+const normalizeCalendarCandidates = (value) => (Array.isArray(value) ? value : [])
+  .filter((candidate) => candidate && typeof candidate.id === "string" && candidate.id.trim())
+  .slice(0, 50)
+  .map(({ id, summary = null, start = null, end = null, location = null }) => ({
+    id, summary: typeof summary === "string" ? summary.slice(0, 500) : null,
+    start: typeof start === "string" ? start.slice(0, 100) : null,
+    end: typeof end === "string" ? end.slice(0, 100) : null,
+    location: typeof location === "string" ? location.slice(0, 500) : null,
+  }));
 const normalizeMessages = (value) => (Array.isArray(value) ? value : [])
   .filter((message) => message && typeof message.content === "string" && (!message.role || ["user", "assistant"].includes(message.role)))
   .slice(-40)
@@ -102,7 +114,7 @@ const createConversationContextService = (model = TemporaryConversation, { ttlMs
   const expiration = () => new Date(now().getTime() + ttlMs);
   const create = async ({ userId, conversationId = crypto.randomUUID() }) => model.create({ conversationId, user: userId, expiresAt: expiration() });
   const getActive = async ({ userId, conversationId }) => model.findOne({ conversationId, user: userId, expiresAt: { $gt: now() } });
-  const update = async ({ userId, conversationId, messages, retrievedContext, placeholderMappings, gmailMessageIds, gmailCandidates, pendingGmailReply, trustedTarget, trustedDraft, pendingAmbiguity, pendingInteraction }) => {
+  const update = async ({ userId, conversationId, messages, retrievedContext, placeholderMappings, gmailMessageIds, gmailCandidates, pendingGmailReply, trustedTarget, trustedDraft, pendingAmbiguity, pendingInteraction, calendarEventIds, calendarCandidates }) => {
     const updateData = { $set: { expiresAt: expiration() } };
     if (messages !== undefined) updateData.$set.messages = normalizeMessages(messages);
     if (retrievedContext !== undefined) updateData.$set.retrievedContext = retrievedContext;
@@ -114,9 +126,11 @@ const createConversationContextService = (model = TemporaryConversation, { ttlMs
     if (trustedDraft !== undefined) updateData.$set.trustedDraft = normalizeTrustedDraft(trustedDraft);
     if (pendingAmbiguity !== undefined) updateData.$set.pendingAmbiguity = normalizePendingAmbiguity(pendingAmbiguity);
     if (pendingInteraction !== undefined) updateData.$set.pendingInteraction = normalizePendingInteraction(pendingInteraction);
+    if (calendarEventIds !== undefined) updateData.$set.calendarEventIds = normalizeCalendarEventIds(calendarEventIds);
+    if (calendarCandidates !== undefined) updateData.$set.calendarCandidates = normalizeCalendarCandidates(calendarCandidates);
     return model.findOneAndUpdate({ conversationId, user: userId, expiresAt: { $gt: now() } }, updateData, { new: true });
   };
   const cleanupExpired = () => model.deleteMany({ expiresAt: { $lte: now() } });
   return { create, getActive, update, cleanupExpired };
 };
-module.exports = { createConversationContextService, DEFAULT_TTL_MS, normalizeGmailMessageIds, normalizeGmailCandidates, normalizeMessages, normalizePendingGmailReply, normalizeTrustedTarget, normalizeTrustedDraft, normalizePendingAmbiguity, normalizePendingInteraction };
+module.exports = { createConversationContextService, DEFAULT_TTL_MS, normalizeGmailMessageIds, normalizeGmailCandidates, normalizeMessages, normalizePendingGmailReply, normalizeTrustedTarget, normalizeTrustedDraft, normalizePendingAmbiguity, normalizePendingInteraction, normalizeCalendarEventIds, normalizeCalendarCandidates };

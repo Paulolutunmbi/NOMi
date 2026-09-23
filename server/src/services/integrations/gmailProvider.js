@@ -1,5 +1,5 @@
 const SUPPORTED_ACTIONS = new Set([
-  "gmail.search", "gmail.read", "gmail.draft", "gmail.send", "gmail.draft.reply", "gmail.send.reply",
+  "gmail.search", "gmail.read", "gmail.draft", "gmail.send", "gmail.draft.reply", "gmail.send.reply", "gmail.draft.update",
 ]);
 
 const MAX_RESULTS = 50;
@@ -131,6 +131,39 @@ const createGmailProvider = ({ gmailFactory } = {}) => {
         const data = response.data || {};
         const result = action === "gmail.draft" ? { draftId: text(data.id, 200), messageId: text(data.message?.id, 200), threadId: text(data.message?.threadId, 200) } : { messageId: text(data.id, 200), threadId: text(data.threadId, 200) };
         return { ...result, auditMetadata: { operation: action === "gmail.draft" ? "draft_created" : "message_sent" } };
+      }
+      if (action === "gmail.draft.update") {
+        const draftId = messageId(payload.draftId);
+        if (!draftId) throw safeError("gmail_invalid_request", "A valid draft ID is required");
+        if (typeof payload.body !== "string" || payload.body.length > MAX_BODY_LENGTH) throw safeError("gmail_invalid_request", "A valid message body is required");
+        let raw;
+        let threadId;
+        if (payload.replyToMessageId) {
+          // Reply-draft edit: rebuild against the original trusted message so the
+          // thread, subject, and reply headers stay correct — never trust a
+          // caller-supplied subject/thread for a reply update.
+          const originalId = messageId(payload.replyToMessageId);
+          if (!originalId) throw safeError("gmail_invalid_request", "A valid original message ID is required");
+          const target = await getMessage(gmail, originalId, "metadata", ["From", "Reply-To", "Subject", "Message-ID", "References"]);
+          const recipient = addressFromHeader(header(target, "Reply-To")) || addressFromHeader(header(target, "From"));
+          if (!recipient) throw safeError("gmail_invalid_request", "The selected message has no reply address");
+          const originalSubject = header(target, "Subject");
+          const subject = /^re:/i.test(originalSubject) ? originalSubject : "Re: " + originalSubject;
+          const originalMessageId = header(target, "Message-ID").replace(/[<>\s]/g, "");
+          const references = text((header(target, "References") + " <" + originalMessageId + ">").trim(), 1800);
+          raw = makeMime({ recipient, subject, body: payload.body, reply: { messageId: originalMessageId, references } });
+          threadId = target.threadId;
+        } else {
+          if (!validEmail(payload.recipient)) throw safeError("gmail_invalid_request", "A valid recipient is required");
+          raw = makeMime({ recipient: payload.recipient, subject: payload.subject, body: payload.body });
+          threadId = payload.threadId || undefined;
+        }
+        const response = await gmail.users.drafts.update({ userId: "me", id: draftId, requestBody: { message: { raw, ...(threadId ? { threadId } : {}) } } });
+        const data = response.data || {};
+        return {
+          draftId: text(data.id, 200), messageId: text(data.message?.id, 200), threadId: text(data.message?.threadId || threadId, 200),
+          auditMetadata: { operation: "draft_updated" },
+        };
       }
       const id = messageId(payload.messageId);
       if (!id || typeof payload.body !== "string") throw safeError("gmail_invalid_request", "A Gmail message ID and body are required");

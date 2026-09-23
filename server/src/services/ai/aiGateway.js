@@ -12,6 +12,8 @@ const defaultClarificationIntent = () => ({
     query: null,
     recipient: null,
     subject: null,
+    eventId: null, summary: null, description: null, location: null,
+    startDateTime: null, endDateTime: null, timeZone: null, attendees: null, timeMin: null, timeMax: null, addMeet: null,
   },
 });
 
@@ -31,6 +33,7 @@ const createAIGateway = ({ providerName = process.env.AI_PROVIDER, adapters = {}
     catch (error) { return { status: "provider_error", provider: providerName, reason: error.code || "ai_provider_unavailable" }; }
     const validation = validateIntent(response, {
       trustedGmailMessageIds: prompt.trustedConversationContext.gmailMessageIds,
+      trustedCalendarEventIds: prompt.trustedConversationContext.calendarEventIds,
       recipientPlaceholders: explicitlyRequestedRecipientPlaceholders(prompt.userRequest, prepared.mappings),
     });
     if (validation.valid) {

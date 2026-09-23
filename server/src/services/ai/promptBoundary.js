@@ -2,10 +2,21 @@ const normalizeTrustedMessageIds = (trustedConversationContext = {}) => {
   const chatHistory = (Array.isArray(trustedConversationContext.chatHistory) ? trustedConversationContext.chatHistory : [])
     .filter((turn) => turn && ["user", "assistant"].includes(turn.role) && typeof turn.content === "string")
     .slice(-20).map((turn) => ({ role: turn.role, content: turn.content.slice(0, 4000) }));
+  // The current trusted draft's body, when one exists, so the model can
+  // revise it (e.g. "make it more casual") without ever seeing or choosing
+  // the draftId itself — that stays server-side.
+  const currentDraftBody = typeof trustedConversationContext.currentDraftBody === "string"
+    ? trustedConversationContext.currentDraftBody.slice(0, 20 * 1024) : null;
   return {
     gmailMessageIds: [...new Set((trustedConversationContext.gmailMessageIds || [])
       .filter((messageId) => typeof messageId === "string" && messageId.trim() && messageId.length <= 10000))].slice(0, 50),
+    calendarEventIds: [...new Set((trustedConversationContext.calendarEventIds || [])
+      .filter((eventId) => typeof eventId === "string" && eventId.trim() && eventId.length <= 1024))].slice(0, 50),
+    // Server clock, so the model can resolve relative dates/times ("tomorrow
+    // at 3pm") into absolute ISO 8601 values itself; it never sets the clock.
+    serverTime: new Date().toISOString(),
     ...(chatHistory.length ? { chatHistory } : {}),
+    ...(currentDraftBody ? { currentDraftBody } : {}),
   };
 };
 
@@ -20,8 +31,13 @@ gmail.draft and gmail.send create NEW-message proposals: recipient and body are 
 Reject unsupported/destructive requests (including deleting mail), permission manipulation, credential/secret disclosure, and arbitrary command execution. Do not turn them into Gmail searches.
 gmail.search_then_reply / gmail.search_then_draft_reply / gmail.search_then_send_reply: propose one when the user requests a reply to a named person whose Gmail target is not yet trusted, including "Reply to Paul and tell him ..." even without an explicit "find" phrase. Query and body are required. Set messageId, recipient, and subject to null. The server resolves the trusted target after searching: identity first, then conversations only within that chosen account. Never invent or include a Gmail message ID.
 Replies and messages referring to "him", "her", "them", "that person", "this person", "the sender", or a previously read/discussed email use gmail.draft.reply or gmail.send.reply with body and an exact trusted existing messageId from trustedConversationContext.gmailMessageIds. Never invent, infer, or alter an ID. For reply actions, subject MUST be null — the server derives the reply subject and thread from the trusted Gmail target. Do not generate or propose a subject for gmail.draft.reply or gmail.send.reply. When the user asks to compose, draft, send, reply, or message using pronouns or without an explicit recipient AND without an explicit discovery phrase, and trustedConversationContext.gmailMessageIds is empty (no trusted target exists in context), do NOT propose gmail.search; propose action "clarification" with a clarification question in body (for example, "Who would you like me to send this to?"). Do NOT fire clarification when the request contains an explicit find/search/locate phrase followed by a reply action — use the gmail.search_then_* intent instead.
-clarification: propose action "clarification" when required target information is missing and cannot be resolved from trustedConversationContext.gmailMessageIds. body is required and must contain the clarifying question to ask the user. All other five parameter fields (maxResults, messageId, query, recipient, subject) must be null.
-For every action, return exactly one supported proposal. All six parameter fields (body, maxResults, messageId, query, recipient, subject) must be present; use null for irrelevant fields. Never execute, resolve identity, access credentials, grant permissions, or bypass later approval.`,
+gmail.draft.edit: propose this ONLY when trustedConversationContext.currentDraftBody is present AND the user is asking to revise the wording/tone/length of the existing draft (for example "make it more casual", "make it shorter", "add a greeting"), not a new topic. body is required and must be the full revised draft body, not a diff or instruction. Never propose a recipient, subject, or messageId for this action — the server keeps the trusted draft identity. If currentDraftBody is absent, do not propose gmail.draft.edit; treat the request as a new draft/reply/clarification instead.
+calendar.search: propose to find/list calendar events. query is optional free text; timeMin/timeMax are optional ISO 8601 timestamps narrowing the window (resolve relative dates like "next week" against trustedConversationContext.serverTime); maxResults is optional (1-50). Do not claim a search succeeded.
+calendar.freebusy: propose to check availability. timeMin and timeMax are required ISO 8601 timestamps.
+calendar.create: propose to schedule a NEW event. summary, startDateTime, and endDateTime are required (resolve relative dates like "tomorrow at 3pm" against trustedConversationContext.serverTime and produce absolute ISO 8601 timestamps). description, location, and timeZone are optional. attendees is an optional comma-separated list: use an email placeholder only when the user explicitly supplied it, or the self marker ("myself", "me", "my own email", "my own email address", "my email", "my email address", "self") for the authenticated user; never invent, infer, or resolve a named person's address — that requires server-side identity resolution which is not yet available for Calendar, so if the user only names a person with no address or placeholder, leave attendees null and propose the event without attendees, or propose "clarification" asking for their email. addMeet is an optional boolean; set it true only when the user asks for a video call, Google Meet, or virtual meeting link.
+calendar.read, calendar.update, calendar.delete: eventId is required and must be an exact ID from trustedConversationContext.calendarEventIds. Never invent it; when only a natural-language description of the event is available, propose calendar.search first. For calendar.update, only set the fields being changed (leave the rest null); attendees follows the same placeholder/self-marker rule as calendar.create. calendar.delete takes only eventId.
+clarification: propose action "clarification" when required target information is missing and cannot be resolved from trustedConversationContext.gmailMessageIds. body is required and must contain the clarifying question to ask the user. All other parameter fields must be null.
+For every action, return exactly one supported proposal. All parameter fields (body, maxResults, messageId, query, recipient, subject, eventId, summary, description, location, startDateTime, endDateTime, timeZone, attendees, timeMin, timeMax, addMeet) must be present; use null for irrelevant fields. Never execute, resolve identity, access credentials, grant permissions, or bypass later approval.`,
   userRequest,
   untrustedRetrievedContent: untrustedRetrievedContent.map(({ source = "external", content }) => ({ source, content })),
   trustedConversationContext: normalizeTrustedMessageIds(trustedConversationContext),
