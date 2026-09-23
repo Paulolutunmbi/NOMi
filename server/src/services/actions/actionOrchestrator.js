@@ -23,6 +23,7 @@ const PRONOUN_REPLY = /^(?:him|her|them|that\s+person|this\s+person|the\s+sender
 // Short, explicit "send the draft" style follow-ups. These are matched loosely
 // but only acted upon when a server-trusted draft already exists in context.
 const SEND_FOLLOWUP = /^\s*(?:send(?:\s+(?:it|that|this|the\s+draft|the\s+email|the\s+message))?|just\s+send|send\s+now|go\s+ahead\s+and\s+send)\s*[.!?]?\s*$/i;
+const isTrustedDraftSendFollowup = (message) => typeof message === "string" && SEND_FOLLOWUP.test(message);
 // Heuristic: does this message look like a short candidate-selection reply
 // (number, name, pronoun, ordinal) vs a full new instruction with verbs?
 // We conservatively treat any message containing an action verb (draft/send/reply/etc)
@@ -165,16 +166,23 @@ const safeResult = (result) => {
 };
 const replyIdentityQuery = (message) => {
   if (typeof message !== "string") return null;
-  const pronounMatch = message.match(PRONOUN_MATCH);
-  if (pronounMatch) return pronounMatch[1].trim();
-
   const findMatch = message.match(/\b(?:find|search(?:\s+for)?|look\s+up|locate)\s+(?:an?\s+)?(?:email|message)?\s*(?:from\s+)?([A-Za-z][A-Za-z .'-]{1,80}?)(?:'s)?(?:\s+(?:email|message|thread))?\s+(?:and\s+)?(?:reply|respond|draft|send)\b/i);
   if (findMatch) return findMatch[1].trim();
 
-  const namedMatch = message.match(/\b(?:reply|response)\s+(?:to\s+)?([A-Za-z][A-Za-z .'-]{1,80}?)(?:\s+(?:about|regarding|on|with|saying|telling|that)\b|[.!?,]|$)/i)
+  const namedMatch = message.match(/\b(?:reply|response)\s+(?:to\s+)?([A-Za-z][A-Za-z .'-]{1,80}?)(?:\s+(?:(?:and\s+)?tell|about|regarding|on|with|saying|telling|that)\b|[.!?,]|$)/i)
     || message.match(/\b(?:tell|telling)\s+([A-Za-z][A-Za-z .'-]{1,80}?)(?:\s+(?:that|about|regarding|to|I|i|we|they|he|she)\b|[.!?,]|$)/i)
     || message.match(/\b(?:craft|compose|draft|send|write|message)\s+(?:a\s+)?(?:message|email|note|reply|response)?\s*(?:to\s+|for\s+|telling\s+)?([A-Za-z][A-Za-z .'-]{1,80}?)(?:\s+(?:about|regarding|on|with|saying|telling|that)\b|[.!?,]|$)/i);
-  return namedMatch ? namedMatch[1].trim() : null;
+  if (namedMatch) return namedMatch[1].trim();
+  const pronounMatch = message.match(PRONOUN_MATCH);
+  return pronounMatch ? pronounMatch[1].trim() : null;
+};
+// Identity discovery is sender-scoped; never use the planner's broad text
+// query, which Gmail may match against subjects, bodies, or CC recipients.
+const senderIdentitySearchQuery = (message) => {
+  const identity = replyIdentityQuery(message);
+  if (!identity) return null;
+  const terms = identity.match(/[A-Za-z0-9._%+@'-]+/g) || [];
+  return terms.length ? `from:(${terms.join(" ")})` : null;
 };
 const payloadFor = (intent) => {
   const { action, parameters } = intent;
@@ -601,7 +609,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
   // "send it" / "send the draft" resolver. Only triggers when a server-trusted
   // draft exists in the conversation context.
   const executeTrustedDraftSend = async ({ user, conversationId, message, conversation, approval }) => {
-    if (!SEND_FOLLOWUP.test(message)) return null;
+    if (!isTrustedDraftSendFollowup(message)) return null;
     const draft = conversation.trustedDraft;
     if (!draft || typeof draft !== "object") return null;
     const originalAction = draft.action;
@@ -646,7 +654,11 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
   // No permission is ever conflated: search needs its own grant, reply needs its own grant.
   const executeSearchThenReply = async ({ user, conversationId, message, intent, activeConversation, approval }) => {
     const replyAction = replyActionFor(intent.action);
-    const searchPayload = { query: intent.parameters.query, maxResults: intent.parameters.maxResults || undefined };
+    // `Paul` alone is a full-text Gmail query. Build the discovery query from
+    // the user-named identity so only sender accounts can become candidates.
+    const identityQuery = senderIdentitySearchQuery(message);
+    if (!identityQuery) return { status: "clarification", action: intent.action, prompt: "Who would you like to reply to?" };
+    const searchPayload = { query: identityQuery, maxResults: intent.parameters.maxResults || undefined };
     const searchTarget = { type: "gmail", id: null, label: null };
     // Step 1 — execute gmail.search (subject to its own permission check)
     const searchExecution = await actionExecutor({ user, provider: "google", action: "gmail.search", payload: searchPayload, target: searchTarget, approval });
@@ -881,4 +893,4 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
   return { execute, resolveAmbiguity, identityKey, groupCandidatesByIdentity };
 };
 
-module.exports = { createActionOrchestrator, normalizedCandidates, safeResult, replyIdentityQuery, isSelfRecipient, replyActionFor, SEARCH_THEN_REPLY_ACTIONS, displaySubject, identityKey, groupCandidatesByIdentity };
+module.exports = { createActionOrchestrator, normalizedCandidates, safeResult, replyIdentityQuery, senderIdentitySearchQuery, isTrustedDraftSendFollowup, isSelfRecipient, replyActionFor, SEARCH_THEN_REPLY_ACTIONS, displaySubject, identityKey, groupCandidatesByIdentity };

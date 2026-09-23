@@ -41,6 +41,7 @@ test("reply disambiguation is identity-first, then searches only the selected ac
   const proposal = { action: "gmail.search_then_reply", parameters: params({ query: "from:Paul", body: "I'll call later." }) };
   const first = await orchestrator.execute({ user, conversationId: "c", message: "Reply to Paul and tell him I'll call later.", proposal });
   assert.equal(first.status, "ambiguous_identity");
+  assert.equal(calls[0].payload.query, "from:(Paul)");
   assert.deepEqual(first.candidates.map((c) => c.email), ["paul.a@example.com", "paul.b@example.com"]);
   assert.equal(first.candidates.some((c) => c.subject === "A project"), false);
   const second = await orchestrator.execute({ user, conversationId: "c", message: "the second one", proposal: null });
@@ -56,6 +57,33 @@ test("reply disambiguation is identity-first, then searches only the selected ac
   assert.equal(sent.status, "success");
   assert.equal(calls[3].action, "gmail.send.reply");
   assert.equal(calls[3].payload.messageId, "b-2");
+});
+
+test("identity discovery never promotes a body-only Paul mention to a sender candidate", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], retrievedContext: [] };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async (input) => {
+      calls.push(input);
+      return { status: "success", result: { messages: [
+        { id: "paul-1", from: { name: "Paul One", email: "paul.one@example.com" }, subject: "Hi" },
+        { id: "paul-2", from: { name: "Paul Two", email: "paul.two@example.com" }, subject: "Hello" },
+        // A defensive server-side filter also excludes a provider result whose
+        // content mentioned Paul but whose sender identity does not match.
+        { id: "content-only", from: { name: "Random Person", email: "random@example.com" }, subject: "Paul was mentioned" },
+        { id: "paul-duplicate", from: { name: "Paul One", email: "paul.one@example.com" }, subject: "Another message" },
+      ] } };
+    },
+  });
+  const result = await orchestrator.execute({
+    user, conversationId: "c", message: "Reply to Paul and tell him I'll get back to him tomorrow.",
+    proposal: { action: "gmail.search_then_reply", parameters: params({ query: "Paul", body: "I'll get back to you tomorrow." }) },
+  });
+  assert.equal(calls[0].payload.query, "from:(Paul)");
+  assert.equal(result.status, "ambiguous_identity");
+  assert.deepEqual(result.candidates.map((c) => c.email), ["paul.one@example.com", "paul.two@example.com"]);
+  for (const candidate of result.candidates) assert.deepEqual(Object.keys(candidate).sort(), ["email", "name", "selectionId"]);
 });
 
 test("ambiguous selection uses stored candidate IDs and resumes the original reply", async () => {
@@ -345,7 +373,7 @@ test("search_then_reply — one safe candidate: search executes then draft.reply
     proposal: { action: "gmail.search_then_reply", parameters: params({ query: "from:Paul", body: "I'll send the files tomorrow." }) },
   });
   assert.equal(calls[0].action, "gmail.search");
-  assert.equal(calls[0].payload.query, "from:Paul");
+  assert.equal(calls[0].payload.query, "from:(Paul)");
   assert.equal(calls[1].action, "gmail.draft.reply");
   assert.equal(calls[1].payload.messageId, "msg-paul");
   assert.equal(calls[1].payload.body, "I'll send the files tomorrow.");
