@@ -58,27 +58,110 @@ router.get("/callback", async (req, res) => {
 router.get("/status", authenticate, async (req, res, next) => {
   try {
     const user = await findOrCreateFromFirebaseClaims(req.user);
-    const account = await ConnectedAccount.findOne({ user: user._id, provider: "google", status: { $in: ["connected", "active"] } }).lean();
-    if (!account) return res.status(200).json({ success: true, connected: false });
-    return res.status(200).json({ success: true, connected: true, account: { email: account.email, displayName: account.displayName, provider: "google", status: "connected", scopes: account.grantedScopes } });
+    const accounts = await ConnectedAccount.find({
+      user: user._id,
+      provider: "google",
+      status: { $in: ["connected", "active"] },
+    }).lean();
+
+    if (!accounts.length) {
+      return res.status(200).json({ success: true, connected: false, accounts: [] });
+    }
+
+    const primary = accounts.find((a) => a.isPrimary) || accounts[0];
+    const formattedAccounts = accounts.map((account) => ({
+      id: account._id,
+      email: account.email,
+      displayName: account.displayName,
+      provider: "google",
+      status: "connected",
+      scopes: account.grantedScopes,
+      isPrimary: Boolean(account.isPrimary),
+    }));
+
+    return res.status(200).json({
+      success: true,
+      connected: true,
+      account: {
+        id: primary._id,
+        email: primary.email,
+        displayName: primary.displayName,
+        provider: "google",
+        status: "connected",
+        scopes: primary.grantedScopes,
+        isPrimary: Boolean(primary.isPrimary),
+      },
+      accounts: formattedAccounts,
+    });
+  } catch (error) { next(error); }
+});
+
+router.post("/primary/:id", authenticate, async (req, res, next) => {
+  try {
+    const user = await findOrCreateFromFirebaseClaims(req.user);
+    const account = await ConnectedAccount.findOne({
+      _id: req.params.id,
+      user: user._id,
+      provider: "google",
+      status: { $in: ["connected", "active"] },
+    });
+
+    if (!account) {
+      return res.status(404).json({ success: false, error: { code: "ACCOUNT_NOT_FOUND", message: "Connected account not found" } });
+    }
+
+    await ConnectedAccount.updateMany({ user: user._id, provider: "google" }, { $set: { isPrimary: false } });
+    account.isPrimary = true;
+    await account.save();
+
+    return res.status(200).json({ success: true, message: "Primary account updated", primaryAccountId: account._id });
   } catch (error) { next(error); }
 });
 
 router.delete("/", authenticate, async (req, res, next) => {
   try {
     const user = await findOrCreateFromFirebaseClaims(req.user);
-    const account = await ConnectedAccount.findOne({ user: user._id, provider: "google", status: { $in: ["connected", "active", "error"] } }).select("+encryptedRefreshToken");
+    const query = { user: user._id, provider: "google", status: { $in: ["connected", "active", "error"] } };
+    const account = await ConnectedAccount.findOne(query).select("+encryptedRefreshToken");
     if (!account) return res.status(200).json({ success: true, connected: false });
     let revocation = "not_attempted";
     if (account.encryptedRefreshToken) {
       try { await revokeGoogleRefreshToken(decrypt(account.encryptedRefreshToken)); revocation = "confirmed"; } catch { revocation = "not_confirmed"; }
     }
     account.status = "revoked";
+    account.isPrimary = false;
     account.encryptedRefreshToken = null;
     account.encryptedAccessToken = null;
     account.accessTokenExpiresAt = null;
     await account.save();
-    await writeIntegrationAudit({ user, action: "google.disconnect.completed", outcome: "success", metadata: { revocation } });
+    await writeIntegrationAudit({ user, action: "google.disconnect.completed", outcome: "success", metadata: { revocation, accountId: account._id } });
+    return res.status(200).json({ success: true, connected: false });
+  } catch (error) {
+    try { const user = await findOrCreateFromFirebaseClaims(req.user); await writeIntegrationAudit({ user, action: "google.disconnect.failed", outcome: "failure", metadata: { errorCode: error.code || "disconnect_failed" } }); } catch {}
+    next(error);
+  }
+});
+
+router.delete("/:id", authenticate, async (req, res, next) => {
+  try {
+    const user = await findOrCreateFromFirebaseClaims(req.user);
+    const query = { user: user._id, provider: "google", status: { $in: ["connected", "active", "error"] } };
+    if (req.params.id) {
+      query._id = req.params.id;
+    }
+    const account = await ConnectedAccount.findOne(query).select("+encryptedRefreshToken");
+    if (!account) return res.status(200).json({ success: true, connected: false });
+    let revocation = "not_attempted";
+    if (account.encryptedRefreshToken) {
+      try { await revokeGoogleRefreshToken(decrypt(account.encryptedRefreshToken)); revocation = "confirmed"; } catch { revocation = "not_confirmed"; }
+    }
+    account.status = "revoked";
+    account.isPrimary = false;
+    account.encryptedRefreshToken = null;
+    account.encryptedAccessToken = null;
+    account.accessTokenExpiresAt = null;
+    await account.save();
+    await writeIntegrationAudit({ user, action: "google.disconnect.completed", outcome: "success", metadata: { revocation, accountId: account._id } });
     return res.status(200).json({ success: true, connected: false });
   } catch (error) {
     try { const user = await findOrCreateFromFirebaseClaims(req.user); await writeIntegrationAudit({ user, action: "google.disconnect.failed", outcome: "failure", metadata: { errorCode: error.code || "disconnect_failed" } }); } catch {}

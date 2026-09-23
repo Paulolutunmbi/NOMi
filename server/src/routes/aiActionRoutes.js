@@ -1,7 +1,7 @@
 const express = require("express");
 const { findOrCreateFromFirebaseClaims } = require("../services/users/userService");
 const { createConversationContextService } = require("../services/conversations/conversationContextService");
-const { createActionOrchestrator } = require("../services/actions/actionOrchestrator");
+const { createActionOrchestrator, SEND_FOLLOWUP } = require("../services/actions/actionOrchestrator");
 const { prepareAIInput, restorePlaceholders } = require("../services/privacy/privacyService");
 const { createAIGateway } = require("../services/ai/aiGateway");
 const { createGroqProvider } = require("../services/ai/groqProvider");
@@ -23,10 +23,13 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
   const requireAuth = authMiddleware || require("../middleware/auth");
   const actionOrchestrator = orchestrator || createActionOrchestrator({ contextService });
   router.post("/execute", requireAuth, async (req, res, next) => {
-    const { conversationId, message, approval } = req.body || {};
-    if (Object.keys(req.body || {}).some((key) => !["conversationId", "message", "approval"].includes(key))
+    const { conversationId, message, approval, attachmentIds } = req.body || {};
+    if (Object.keys(req.body || {}).some((key) => !["conversationId", "message", "approval", "attachmentIds"].includes(key))
       || !validConversationId(conversationId) || typeof message !== "string" || !message.trim() || message.length > 4000
-      || (approval !== undefined && !["allow_once", "always_allow", "deny"].includes(approval))) return fail(res, 400, "AI_ACTION_REQUEST_INVALID", "A valid conversation and message are required.");
+      || (approval !== undefined && !["allow_once", "always_allow", "deny"].includes(approval))
+      || (attachmentIds !== undefined && (!Array.isArray(attachmentIds) || attachmentIds.some((id) => typeof id !== "string" || !id.trim() || id.length > 100)))) {
+      return fail(res, 400, "AI_ACTION_REQUEST_INVALID", "A valid conversation and message are required.");
+    }
     try {
       const user = await getUser(req.user);
       let conversation = await contextService.getActive({ userId: user._id, conversationId });
@@ -42,8 +45,12 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
 
       // Pending interaction selections are deterministic and never invoke the
       // AI planner. This includes "the second one" at either stage.
-      if (conversation.pendingInteraction) {
-        const outcome = await actionOrchestrator.execute({ user, conversationId, message, conversation, proposal: null, approval });
+      const isSelectionStage = conversation.pendingInteraction
+        && ["identity_selection", "conversation_selection"].includes(conversation.pendingInteraction.stage);
+      const isTrustedSend = conversation.trustedDraft && SEND_FOLLOWUP.test(message);
+
+      if (isSelectionStage || isTrustedSend) {
+        const outcome = await actionOrchestrator.execute({ user, conversationId, message, conversation, proposal: null, approval, attachmentIds });
         return recordOutcome(outcome);
       }
 
@@ -51,7 +58,7 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
       // route directly to the orchestrator without calling the AI gateway or performing a new search.
       // We only do this for short, non-action-verb messages that look like a selection ("1", "Paul", etc).
       if (conversation.pendingGmailReply && looksLikeAmbiguityResolution(message)) {
-        const outcome = await actionOrchestrator.execute({ user, conversationId, message, conversation, proposal: null, approval });
+        const outcome = await actionOrchestrator.execute({ user, conversationId, message, conversation, proposal: null, approval, attachmentIds });
         return recordOutcome(outcome);
       }
       // Stale pending state with a new instruction: drop so the fresh proposal runs.
@@ -63,7 +70,7 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
 
       // Non-compound pending ambiguity: route directly to orchestrator without re-calling AI.
       if (conversation.pendingAmbiguity && !conversation.pendingGmailReply && looksLikeAmbiguityResolution(message)) {
-        const outcome = await actionOrchestrator.execute({ user, conversationId, message, conversation, proposal: null, approval });
+        const outcome = await actionOrchestrator.execute({ user, conversationId, message, conversation, proposal: null, approval, attachmentIds });
         return recordOutcome(outcome);
       }
       // Stale pendingAmbiguity with a new-style instruction: drop.
@@ -79,7 +86,7 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
         trustedConversationContext: { gmailMessageIds: conversation.gmailMessageIds || [], calendarEventIds: conversation.calendarEventIds || [], chatHistory: conversation.messages || [],
           currentDraftBody: conversation.trustedDraft?.body || null } });
       if (planned.status !== "proposed") return fail(res, planned.status === "invalid" ? 422 : 503, planned.status === "invalid" ? "AI_INTENT_INVALID" : "AI_PROVIDER_ERROR", "The request could not be safely executed.");
-      const outcome = await actionOrchestrator.execute({ user, conversationId, message, conversation, proposal: restorePlaceholders(planned.intent, safe.mappings), approval });
+      const outcome = await actionOrchestrator.execute({ user, conversationId, message, conversation, proposal: restorePlaceholders(planned.intent, safe.mappings), approval, attachmentIds });
       return recordOutcome(outcome);
     } catch (error) { return next(error); }
   });

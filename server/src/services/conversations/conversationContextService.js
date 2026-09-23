@@ -56,7 +56,19 @@ const normalizeTrustedDraft = (value) => {
   const action = ["gmail.draft", "gmail.send", "gmail.draft.reply", "gmail.send.reply"].includes(value.action) ? value.action : null;
   const body = typeof value.body === "string" ? value.body.slice(0, 20 * 1024) : null;
   if (!action || !(draftId || messageId)) return null;
-  return { draftId, threadId, messageId, recipient, subject, action, body };
+  const attachments = Array.isArray(value.attachments)
+    ? value.attachments
+        .filter((a) => a && typeof a === "object" && typeof a.filename === "string")
+        .slice(0, 10)
+        .map((a) => ({
+          id: typeof a.id === "string" ? a.id.slice(0, 100) : undefined,
+          filename: a.filename.slice(0, 255),
+          mimeType: typeof a.mimeType === "string" ? a.mimeType.slice(0, 100) : "image/jpeg",
+          size: Number.isInteger(a.size) ? a.size : undefined,
+          data: a.data || a.buffer || undefined,
+        }))
+    : [];
+  return { draftId, threadId, messageId, recipient, subject, action, body, attachments };
 };
 const normalizePendingAmbiguity = (value) => {
   if (!value || typeof value !== "object") return null;

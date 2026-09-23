@@ -11,11 +11,16 @@ const googleIntegrationRoutes = require("./routes/googleIntegrationRoutes");
 const { createAIIntentRouter } = require("./routes/aiIntentRoutes");
 const { createAIActionRouter } = require("./routes/aiActionRoutes");
 const { createPermissionRouter } = require("./routes/permissionRoutes");
+const { createAuthRouter } = require("./routes/authRoutes");
+const { createAttachmentRouter } = require("./routes/attachmentRoutes");
 
 const app = express();
 
 app.use(cors());
 app.use(express.json({ limit: "16kb" }));
+app.use("/api/auth", createAuthRouter());
+app.use("/api/ai/attachments", createAttachmentRouter());
+app.use("/api/attachments", createAttachmentRouter());
 app.use("/api/integrations/google", googleIntegrationRoutes);
 app.use("/api/ai", createAIIntentRouter());
 app.use("/api/ai", createAIActionRouter());

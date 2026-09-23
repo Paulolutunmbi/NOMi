@@ -9,6 +9,7 @@ const connectedAccountSchema = new mongoose.Schema(
     displayName: { type: String, default: null, trim: true },
     grantedScopes: { type: [String], default: [] },
     status: { type: String, enum: ["active", "connected", "revoked", "error"], default: "connected" },
+    isPrimary: { type: Boolean, default: false },
     encryptedRefreshToken: { type: mongoose.Schema.Types.Mixed, default: null, select: false },
     encryptedAccessToken: { type: mongoose.Schema.Types.Mixed, default: null, select: false },
     accessTokenExpiresAt: { type: Date, default: null, select: false },

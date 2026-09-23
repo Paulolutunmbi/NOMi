@@ -84,7 +84,7 @@ function AiIntentTestPage() {
     loadPermissions().catch(() => setPermissionMessage('Unable to load saved permissions.'))
   }), [loadPermissions])
 
-  const executeAiAction = async (approval = undefined) => {
+  const executeAiAction = async (approval = undefined, messageOverride = undefined) => {
     if (isSubmitting) return
     setIsSubmitting(true)
     setResult(null)
@@ -103,9 +103,10 @@ function AiIntentTestPage() {
         return
       }
 
+      const activeMessage = messageOverride !== undefined ? messageOverride : message
       const requestBody = {
         conversationId,
-        message,
+        message: activeMessage,
         ...(approval ? { approval } : {}),
       }
 
@@ -288,8 +289,9 @@ function AiIntentTestPage() {
 
   const selectCandidate = (selectionId) => {
     if (!selectionId || isSubmitting) return
-    setMessage(String(selectionId))
-    setTimeout(() => executeAiAction(), 0)
+    const idStr = String(selectionId)
+    setMessage(idStr)
+    executeAiAction(undefined, idStr)
   }
 
   return (

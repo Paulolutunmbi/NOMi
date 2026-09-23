@@ -1,6 +1,7 @@
 const { executeAction } = require("./actionExecutor");
 const { resolveIdentity } = require("../identity/identityResolver");
 const { isSelfRecipientMarker, generateSubjectFromBody } = require("../ai/intentValidator");
+const { getAttachmentsForUser, removeAttachments } = require("../attachments/attachmentService");
 
 const REPLY_ACTIONS = new Set(["gmail.draft.reply", "gmail.send.reply"]);
 const DRAFT_ACTIONS = new Set(["gmail.draft", "gmail.draft.reply"]);
@@ -521,6 +522,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
         : SEND_ACTIONS.has(action) ? (action === "gmail.send.reply" ? "gmail.send.reply" : "gmail.send")
         : action,
       body: payload?.body || null,
+      attachments: Array.isArray(payload?.attachments) ? payload.attachments : [],
     };
     await contextService.update({ userId: user._id, conversationId, trustedDraft: draftData }).catch(() => {});
   };
@@ -583,18 +585,19 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
   // casual"). The draftId, recipient/subject (new-message drafts) or original
   // messageId (reply drafts) all come from server-trusted conversation state
   // — the model supplies only the revised body text.
-  const executeDraftEdit = async ({ user, conversationId, intent, conversation, approval }) => {
+  const executeDraftEdit = async ({ user, conversationId, intent, conversation, approval, attachments }) => {
     const draft = conversation.trustedDraft;
     if (!draft || !draft.draftId || !DRAFT_ACTIONS.has(draft.action)) {
       return { status: "rejected", reason: "no_active_draft_to_edit" };
     }
+    const resolvedAttachments = attachments !== undefined ? attachments : (draft.attachments || []);
     const payload = draft.action === "gmail.draft.reply"
-      ? { draftId: draft.draftId, body: intent.parameters.body, replyToMessageId: draft.messageId }
-      : { draftId: draft.draftId, body: intent.parameters.body, recipient: draft.recipient, subject: draft.subject, threadId: draft.threadId };
+      ? { draftId: draft.draftId, body: intent.parameters.body, replyToMessageId: draft.messageId, attachments: resolvedAttachments }
+      : { draftId: draft.draftId, body: intent.parameters.body, recipient: draft.recipient, subject: draft.subject, threadId: draft.threadId, attachments: resolvedAttachments };
     const target = { type: "gmail_message", id: draft.draftId };
     const execution = await actionExecutor({ user, provider: "google", action: "gmail.draft.update", payload, target, approval });
     if (execution.status !== "success") return { status: execution.status, action: "gmail.draft.edit" };
-    await contextService.update({ userId: user._id, conversationId, trustedDraft: { ...draft, body: intent.parameters.body } }).catch(() => {});
+    await contextService.update({ userId: user._id, conversationId, trustedDraft: { ...draft, body: intent.parameters.body, attachments: resolvedAttachments } }).catch(() => {});
     return { status: "success", action: "gmail.draft.edit", result: safeResult(execution.result) };
   };
 
@@ -613,7 +616,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       // For a reply draft we use the trusted messageId the reply was created
       // against. The Gmail provider will re-resolve recipient/thread server-side.
       if (!draft.messageId) return null;
-      payload = { messageId: draft.messageId, body: draft.body || "" };
+      payload = { messageId: draft.messageId, body: draft.body || "", attachments: draft.attachments || [] };
       target = { type: "gmail_message", id: draft.messageId };
     } else if (originalAction === "gmail.draft") {
       sendAction = "gmail.send";
@@ -622,6 +625,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
         recipient: draft.recipient,
         subject: draft.subject || generateSubjectFromBody(draft.body),
         body: draft.body || "",
+        attachments: draft.attachments || [],
       };
       target = { type: "gmail", id: null, label: null };
     } else if (SEND_ACTIONS.has(originalAction)) {
@@ -634,6 +638,9 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     if (execution.status === "success") {
       // Clear the draft context since we've sent it.
       await contextService.update({ userId: user._id, conversationId, trustedDraft: null }).catch(() => {});
+      if (Array.isArray(draft.attachments) && draft.attachments.length) {
+        await removeAttachments({ user, attachmentIds: draft.attachments.map((a) => a.id).filter(Boolean) }).catch(() => {});
+      }
     }
     return { status: execution.status, action: sendAction, result: execution.status === "success" ? safeResult(execution.result) : undefined };
   };
@@ -644,7 +651,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
   //   3. Resolves identity + message deterministically.
   //   4. Continues to gmail.draft.reply / gmail.send.reply under the reply permission.
   // No permission is ever conflated: search needs its own grant, reply needs its own grant.
-  const executeSearchThenReply = async ({ user, conversationId, message, intent, activeConversation, approval }) => {
+  const executeSearchThenReply = async ({ user, conversationId, message, intent, activeConversation, approval, attachments = [] }) => {
     const replyAction = replyActionFor(intent.action);
     const searchPayload = { query: intent.parameters.query, maxResults: intent.parameters.maxResults || undefined };
     const searchTarget = { type: "gmail", id: null, label: null };
@@ -713,19 +720,31 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     // The server-trusted message ID comes from resolution.identity.id (never from the model or client).
     const trustedMessageId = resolution.identity.id;
     const replyTarget = { type: "gmail_message", id: trustedMessageId };
-    const replyPayload = { messageId: trustedMessageId, body: intent.parameters.body };
+    const replyPayload = { messageId: trustedMessageId, body: intent.parameters.body, ...(attachments?.length ? { attachments } : {}) };
     await persistTrustedTarget({ user, conversationId, candidate: resolution.identity });
     const replyExecution = await actionExecutor({ user, provider: "google", action: replyAction, payload: replyPayload, target: replyTarget, approval });
     if (replyExecution.status !== "success") {
       return { status: replyExecution.status, action: replyAction };
     }
     await persistDraftContext({ user, conversationId, action: replyAction, result: replyExecution.result, payload: replyPayload, candidate: resolution.identity });
+    if (SEND_ACTIONS.has(replyAction) && attachments?.length) {
+      await removeAttachments({ user, attachmentIds: attachments.map((a) => a.id).filter(Boolean) }).catch(() => {});
+    }
     return { status: "success", action: replyAction, result: safeResult(replyExecution.result) };
   };
 
-  const execute = async ({ user, conversationId, message, proposal, conversation, approval }) => {
+  const execute = async ({ user, conversationId, message, proposal, conversation, approval, attachmentIds }) => {
     let activeConversation = conversation || await contextService.getActive({ userId: user._id, conversationId });
     if (!activeConversation) activeConversation = await contextService.create({ userId: user._id, conversationId });
+
+    let resolvedAttachments = [];
+    if (Array.isArray(attachmentIds) && attachmentIds.length) {
+      try {
+        resolvedAttachments = await getAttachmentsForUser({ user, attachmentIds });
+      } catch (attErr) {
+        return { status: "rejected", reason: attErr.code || "attachment_validation_failed" };
+      }
+    }
 
     const interactionOutcome = await executePendingInteraction({ user, conversationId, message, conversation: activeConversation, approval });
     if (interactionOutcome) return interactionOutcome;
@@ -770,7 +789,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
 
     // ── Compound search-then-reply flow ──────────────────────────────────────
     if (SEARCH_THEN_REPLY_ACTIONS.has(intent.action)) {
-      return executeSearchThenReply({ user, conversationId, message, intent, activeConversation, approval });
+      return executeSearchThenReply({ user, conversationId, message, intent, activeConversation, approval, attachments: resolvedAttachments });
     }
 
     if (intent.action === "clarification") {
@@ -784,7 +803,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     }
 
     if (intent.action === "gmail.draft.edit") {
-      return executeDraftEdit({ user, conversationId, intent, conversation: activeConversation, approval });
+      return executeDraftEdit({ user, conversationId, intent, conversation: activeConversation, approval, attachments: resolvedAttachments.length ? resolvedAttachments : undefined });
     }
 
     if (REPLY_ACTIONS.has(intent.action)) {
@@ -835,8 +854,13 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       ? { type: "gmail_message", id: intent.parameters.messageId }
       : { type: "gmail", id: null, label: null };
     const executionPayload = payloadFor(intent);
+    if (resolvedAttachments.length) executionPayload.attachments = resolvedAttachments;
     const execution = await actionExecutor({ user, provider: "google", action: intent.action, payload: executionPayload, target, approval });
     if (execution.status !== "success") return { status: execution.status, action: intent.action };
+
+    if (SEND_ACTIONS.has(intent.action) && resolvedAttachments.length) {
+      await removeAttachments({ user, attachmentIds: resolvedAttachments.map((a) => a.id).filter(Boolean) }).catch(() => {});
+    }
 
     const candidates = intent.action === "gmail.search" ? normalizedCandidates(execution.result) : [];
     if (candidates.length) {
@@ -881,4 +905,4 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
   return { execute, resolveAmbiguity, identityKey, groupCandidatesByIdentity };
 };
 
-module.exports = { createActionOrchestrator, normalizedCandidates, safeResult, replyIdentityQuery, isSelfRecipient, replyActionFor, SEARCH_THEN_REPLY_ACTIONS, displaySubject, identityKey, groupCandidatesByIdentity };
+module.exports = { createActionOrchestrator, normalizedCandidates, safeResult, replyIdentityQuery, isSelfRecipient, replyActionFor, SEARCH_THEN_REPLY_ACTIONS, displaySubject, identityKey, groupCandidatesByIdentity, SEND_FOLLOWUP };

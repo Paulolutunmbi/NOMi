@@ -87,7 +87,9 @@ const validateIntent = (intent, { trustedGmailMessageIds = [], trustedCalendarEv
   if (!intent.parameters || typeof intent.parameters !== "object" || Array.isArray(intent.parameters)) return { valid: false, reason: "parameters_must_be_an_object" };
   const rule = ACTIONS[intent.action];
   const keys = Object.keys(intent.parameters);
+  // Ensure all expected schema parameters are present (may be null)
   if (keys.length !== SCHEMA_PARAMETERS.length || SCHEMA_PARAMETERS.some((key) => !Object.hasOwn(intent.parameters, key))) return { valid: false, reason: "incomplete_provider_output" };
+  // Ensure no unexpected parameters are included
   if (keys.some((key) => !SCHEMA_PARAMETERS.includes(key))) return { valid: false, reason: "unexpected_parameter" };
   if (keys.some((key) => intent.parameters[key] !== null && !rule.allowed.includes(key))) return { valid: false, reason: "unexpected_parameter" };
   if (rule.required.some((key) => !SAFE_STRING(intent.parameters[key]))) return { valid: false, reason: "missing_or_invalid_parameter" };

@@ -28,6 +28,8 @@ const normalizeGoogleError = (error, { messageNotFound = false } = {}) => {
   return safeError("google_api_error", "Google API request could not be completed");
 };
 
+const crypto = require("node:crypto");
+
 const text = (value, max = MAX_HEADER_LENGTH) => typeof value === "string" ? value.replace(/[\r\n]+/g, " ").trim().slice(0, max) : "";
 const header = (message, name) => text((message?.payload?.headers || []).find((item) => item.name?.toLowerCase() === name.toLowerCase())?.value);
 const decodeBase64Url = (value) => {
@@ -71,12 +73,54 @@ const encodeRaw = (value) => Buffer.from(value, "utf8").toString("base64").repla
 const encodeHeader = (value) => /^[\x20-\x7e]*$/.test(value) ? value : `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
 const validEmail = (value) => EMAIL.test(value || "");
 const messageId = (value) => typeof value === "string" && value.trim() && value.length <= 200 ? value.trim() : null;
-const makeMime = ({ recipient, subject, body, reply }) => {
+const makeMime = ({ recipient, subject, body, reply, attachments = [] }) => {
   if (!validEmail(recipient)) throw safeError("gmail_invalid_request", "A valid recipient is required");
   if (typeof body !== "string" || body.length > MAX_BODY_LENGTH) throw safeError("gmail_invalid_request", "A valid message body is required");
-  const headers = ["To: " + recipient, "Subject: " + encodeHeader(text(subject || "", MAX_HEADER_LENGTH)), "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: 8bit"];
+
+  if (!attachments || !attachments.length) {
+    const headers = ["To: " + recipient, "Subject: " + encodeHeader(text(subject || "", MAX_HEADER_LENGTH)), "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: 8bit"];
+    if (reply?.messageId) headers.push("In-Reply-To: <" + reply.messageId.replace(/[<>\s]/g, "") + ">", "References: " + reply.references);
+    return encodeRaw(headers.join("\r\n") + "\r\n\r\n" + body.replace(/\r?\n/g, "\r\n"));
+  }
+
+  const boundary = `----=_Nomi_Part_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
+  const headers = [
+    "To: " + recipient,
+    "Subject: " + encodeHeader(text(subject || "", MAX_HEADER_LENGTH)),
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+  ];
   if (reply?.messageId) headers.push("In-Reply-To: <" + reply.messageId.replace(/[<>\s]/g, "") + ">", "References: " + reply.references);
-  return encodeRaw(headers.join("\r\n") + "\r\n\r\n" + body.replace(/\r?\n/g, "\r\n"));
+
+  const parts = [
+    headers.join("\r\n"),
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    body.replace(/\r?\n/g, "\r\n"),
+  ];
+
+  for (const att of attachments) {
+    const filename = att.filename || "attachment";
+    const mimeType = att.mimeType || "application/octet-stream";
+    const rawBuffer = Buffer.isBuffer(att.data) ? att.data
+      : (typeof att.data === "string" ? Buffer.from(att.data, "base64") : Buffer.from(att.buffer || ""));
+    const base64Content = rawBuffer.toString("base64").replace(/(.{76})/g, "$1\r\n");
+
+    parts.push(
+      `--${boundary}`,
+      `Content-Type: ${mimeType}; name="${encodeHeader(filename)}"`,
+      `Content-Disposition: attachment; filename="${encodeHeader(filename)}"`,
+      "Content-Transfer-Encoding: base64",
+      "",
+      base64Content
+    );
+  }
+
+  parts.push(`--${boundary}--`, "");
+  return encodeRaw(parts.join("\r\n"));
 };
 const addressFromHeader = (value) => {
   const match = String(value || "").match(/<([^<>\s]+@[^<>\s]+)>/) || String(value || "").match(/[^\s<>@,]+@[^\s<>@,]+\.[^\s<>@,]+/);
@@ -151,11 +195,11 @@ const createGmailProvider = ({ gmailFactory } = {}) => {
           const subject = /^re:/i.test(originalSubject) ? originalSubject : "Re: " + originalSubject;
           const originalMessageId = header(target, "Message-ID").replace(/[<>\s]/g, "");
           const references = text((header(target, "References") + " <" + originalMessageId + ">").trim(), 1800);
-          raw = makeMime({ recipient, subject, body: payload.body, reply: { messageId: originalMessageId, references } });
+          raw = makeMime({ recipient, subject, body: payload.body, reply: { messageId: originalMessageId, references }, attachments: payload.attachments });
           threadId = target.threadId;
         } else {
           if (!validEmail(payload.recipient)) throw safeError("gmail_invalid_request", "A valid recipient is required");
-          raw = makeMime({ recipient: payload.recipient, subject: payload.subject, body: payload.body });
+          raw = makeMime({ recipient: payload.recipient, subject: payload.subject, body: payload.body, attachments: payload.attachments });
           threadId = payload.threadId || undefined;
         }
         const response = await gmail.users.drafts.update({ userId: "me", id: draftId, requestBody: { message: { raw, ...(threadId ? { threadId } : {}) } } });
@@ -174,7 +218,7 @@ const createGmailProvider = ({ gmailFactory } = {}) => {
       const subject = /^re:/i.test(originalSubject) ? originalSubject : "Re: " + originalSubject;
       const originalMessageId = header(target, "Message-ID").replace(/[<>\s]/g, "");
       const references = text((header(target, "References") + " <" + originalMessageId + ">").trim(), 1800);
-      const raw = makeMime({ recipient, subject, body: payload.body, reply: { messageId: originalMessageId, references } });
+      const raw = makeMime({ recipient, subject, body: payload.body, reply: { messageId: originalMessageId, references }, attachments: payload.attachments });
       const requestBody = { raw, threadId: target.threadId };
       const response = action === "gmail.draft.reply"
         ? await gmail.users.drafts.create({ userId: "me", requestBody: { message: requestBody } })
