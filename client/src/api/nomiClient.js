@@ -1,0 +1,95 @@
+import { getCurrentIdToken } from '../services/auth'
+
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'
+
+// Thrown when the request never reached the server (offline / DNS / CORS).
+export class NomiNetworkError extends Error {
+  constructor() {
+    super('NOMI_NETWORK_ERROR')
+    this.name = 'NomiNetworkError'
+  }
+}
+
+// Thrown for any non-2xx response the server actually returned.
+// Carries the HTTP status and the server's { code, message } when present,
+// so the UI can pick the right error state without ever showing raw
+// backend payloads to the user.
+export class NomiApiError extends Error {
+  constructor(status, code, message) {
+    super(message || 'NOMI_API_ERROR')
+    this.name = 'NomiApiError'
+    this.status = status
+    this.code = code || 'UNKNOWN'
+  }
+}
+
+async function request(path, { method = 'GET', body, signal } = {}) {
+  const token = await getCurrentIdToken()
+  if (!token) {
+    throw new NomiApiError(401, 'AUTHENTICATION_FAILED', 'Sign in to NOMI first.')
+  }
+
+  let response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      signal,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    })
+  } catch {
+    throw new NomiNetworkError()
+  }
+
+  const data = await response.json().catch(() => ({}))
+
+  if (!response.ok) {
+    const errorPayload = data?.error
+    throw new NomiApiError(
+      response.status,
+      errorPayload?.code,
+      errorPayload?.message || data?.message,
+    )
+  }
+
+  return data
+}
+
+/**
+ * The single endpoint that drives every Gmail and Calendar workflow.
+ * `approval` is only sent once NOMI has asked for one:
+ * 'allow_once' | 'always_allow' | 'deny'.
+ */
+export function executeAiAction({ conversationId, message, approval, signal }) {
+  return request('/api/ai/execute', {
+    method: 'POST',
+    body: { conversationId, message, ...(approval ? { approval } : {}) },
+    signal,
+  })
+}
+
+export function fetchPermissions() {
+  return request('/api/permissions')
+}
+
+export function revokePermission({ provider, action }) {
+  return request(`/api/permissions/${encodeURIComponent(provider)}/${encodeURIComponent(action)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function fetchGoogleStatus() {
+  return request('/api/integrations/google/status')
+}
+
+export async function getGoogleConnectUrl() {
+  const data = await request('/api/integrations/google/connect?mode=json')
+  return data.authorizationUrl
+}
+
+export function disconnectGoogle() {
+  return request('/api/integrations/google', { method: 'DELETE' })
+}

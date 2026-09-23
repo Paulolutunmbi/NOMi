@@ -1,7 +1,7 @@
 const express = require("express");
 const { findOrCreateFromFirebaseClaims } = require("../services/users/userService");
 const { createConversationContextService } = require("../services/conversations/conversationContextService");
-const { createActionOrchestrator, isTrustedDraftSendFollowup } = require("../services/actions/actionOrchestrator");
+const { createActionOrchestrator } = require("../services/actions/actionOrchestrator");
 const { prepareAIInput, restorePlaceholders } = require("../services/privacy/privacyService");
 const { createAIGateway } = require("../services/ai/aiGateway");
 const { createGroqProvider } = require("../services/ai/groqProvider");
@@ -40,20 +40,9 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
         return res.status(outcome.status === "rejected" ? 422 : 200).json({ success: outcome.status === "success", outcome });
       };
 
-      // Only selection stages are deterministic. Previously any pending state
-      // (including `draft_created`) entered this branch with proposal:null;
-      // draft edits then fell through as invalid_proposal before the planner
-      // could supply the revised body.
-      if (["identity_selection", "conversation_selection"].includes(conversation.pendingInteraction?.stage)) {
-        const outcome = await actionOrchestrator.execute({ user, conversationId, message, conversation, proposal: null, approval });
-        return recordOutcome(outcome);
-      }
-
-      // A trusted draft makes an explicit send command deterministic too. Its
-      // IDs/body are recovered solely from server conversation state, before
-      // any model call. Other draft follow-ups (for example tone edits) still
-      // need planning for text interpretation and receive currentDraftBody.
-      if (conversation.trustedDraft && isTrustedDraftSendFollowup(message)) {
+      // Pending interaction selections are deterministic and never invoke the
+      // AI planner. This includes "the second one" at either stage.
+      if (conversation.pendingInteraction) {
         const outcome = await actionOrchestrator.execute({ user, conversationId, message, conversation, proposal: null, approval });
         return recordOutcome(outcome);
       }
