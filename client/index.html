@@ -7,6 +7,20 @@
     <meta name="description" content="NOMI — your intelligent workspace for email and calendar." />
     <meta name="theme-color" content="#17140F" />
     <title>NOMI</title>
+    <script>
+      // Applied before React mounts so there's no flash of the wrong theme.
+      (function () {
+        try {
+          var stored = window.localStorage.getItem('nomi.theme');
+          var resolved = stored === 'light' || stored === 'dark'
+            ? stored
+            : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          document.documentElement.dataset.theme = resolved;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

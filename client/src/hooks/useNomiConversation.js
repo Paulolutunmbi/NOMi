@@ -1,16 +1,28 @@
 import { useCallback, useRef, useState } from 'react'
-import { executeAiAction, NomiApiError, NomiNetworkError } from '../api/nomiClient'
+import { executeAiAction } from '../api/nomiClient'
+import { errorKindFor } from '../utils/errorKind'
 
 let turnCounter = 0
 const nextId = () => `t${++turnCounter}-${Date.now()}`
 
+// Draft/send actions are the only ones where an attached file is relevant.
+const CARRIES_ATTACHMENTS = /^gmail\.(draft|send)(\.|$)/
+
 // Maps a raw outcome/error into the shape the transcript renders.
 // Nothing here fabricates content the backend didn't actually send —
-// see NomiCard's draft-related components for why.
-function turnFromOutcome(outcome) {
+// see WorkspaceCards' draft-related components for why.
+function turnFromOutcome(outcome, attachmentsMeta) {
   switch (outcome.status) {
-    case 'success':
-      return { kind: 'success', action: outcome.action, result: outcome.result }
+    case 'success': {
+      const turn = { kind: 'success', action: outcome.action, result: outcome.result }
+      // We know what *we* sent with this request, and a success status
+      // confirms the backend processed the whole request — attachments
+      // included. This never claims content the backend didn't confirm.
+      if (attachmentsMeta?.length && CARRIES_ATTACHMENTS.test(outcome.action || '')) {
+        turn.attachmentsMeta = attachmentsMeta
+      }
+      return turn
+    }
     case 'approval_required':
       return { kind: 'approval_required', action: outcome.action }
     case 'denied':
@@ -32,17 +44,7 @@ function turnFromOutcome(outcome) {
 }
 
 function turnFromError(error) {
-  if (error instanceof NomiNetworkError) {
-    return { kind: 'error', errorKind: 'network' }
-  }
-  if (error instanceof NomiApiError) {
-    if (error.status === 401) return { kind: 'error', errorKind: 'auth' }
-    if (error.status === 503) return { kind: 'error', errorKind: 'server' }
-    if (error.status === 422) return { kind: 'error', errorKind: 'rejected' }
-    if (error.status === 408 || error.status === 504) return { kind: 'error', errorKind: 'timeout' }
-    return { kind: 'error', errorKind: 'server' }
-  }
-  return { kind: 'error', errorKind: 'server' }
+  return { kind: 'error', errorKind: errorKindFor(error) }
 }
 
 /**
@@ -55,9 +57,11 @@ export function useNomiConversation(conversationId) {
   const [isProcessing, setIsProcessing] = useState(false)
   const [processingLabel, setProcessingLabel] = useState('NOMI is working…')
   const lastMessageRef = useRef('')
+  const lastAttachmentIdsRef = useRef([])
+  const lastAttachmentsMetaRef = useRef([])
   const abortRef = useRef(null)
 
-  const runExecute = useCallback(async ({ message, approval, label }) => {
+  const runExecute = useCallback(async ({ message, approval, label, attachmentIds, attachmentsMeta }) => {
     setIsProcessing(true)
     setProcessingLabel(label || 'NOMI is working…')
     abortRef.current?.abort()
@@ -65,8 +69,8 @@ export function useNomiConversation(conversationId) {
     abortRef.current = controller
 
     try {
-      const data = await executeAiAction({ conversationId, message, approval, signal: controller.signal })
-      const turn = { id: nextId(), role: 'nomi', ...turnFromOutcome(data.outcome) }
+      const data = await executeAiAction({ conversationId, message, approval, attachmentIds, signal: controller.signal })
+      const turn = { id: nextId(), role: 'nomi', ...turnFromOutcome(data.outcome, attachmentsMeta) }
       setTurns((prev) => [...prev, turn])
       return turn
     } catch (error) {
@@ -79,31 +83,52 @@ export function useNomiConversation(conversationId) {
     }
   }, [conversationId])
 
-  const send = useCallback((message) => {
+  const send = useCallback((message, attachmentIds = [], attachmentsMeta = []) => {
     const trimmed = message.trim()
     if (!trimmed) return
     lastMessageRef.current = trimmed
-    setTurns((prev) => [...prev, { id: nextId(), role: 'user', kind: 'text', message: trimmed }])
-    return runExecute({ message: trimmed, label: labelFor(trimmed) })
+    lastAttachmentIdsRef.current = attachmentIds
+    lastAttachmentsMetaRef.current = attachmentsMeta
+    setTurns((prev) => [
+      ...prev,
+      { id: nextId(), role: 'user', kind: 'text', message: trimmed, attachments: attachmentsMeta },
+    ])
+    return runExecute({ message: trimmed, label: labelFor(trimmed), attachmentIds, attachmentsMeta })
   }, [runExecute])
 
   // Tapping an identity/conversation/calendar candidate card.
   const selectCandidate = useCallback((selectionId) => {
     if (!selectionId) return
     lastMessageRef.current = String(selectionId)
-    return runExecute({ message: String(selectionId), label: 'Looking through the matches…' })
+    return runExecute({
+      message: String(selectionId),
+      label: 'Looking through the matches…',
+      attachmentIds: lastAttachmentIdsRef.current,
+      attachmentsMeta: lastAttachmentsMetaRef.current,
+    })
   }, [runExecute])
 
   // Responding to an approval_required card.
   const respondApproval = useCallback((approval) => {
     const message = lastMessageRef.current || 'continue'
     const label = approval === 'deny' ? 'Cancelling…' : 'Finishing that up…'
-    return runExecute({ message, approval, label })
+    return runExecute({
+      message,
+      approval,
+      label,
+      attachmentIds: lastAttachmentIdsRef.current,
+      attachmentsMeta: lastAttachmentsMetaRef.current,
+    })
   }, [runExecute])
 
   const retryLast = useCallback(() => {
     if (!lastMessageRef.current) return
-    return runExecute({ message: lastMessageRef.current, label: 'Trying again…' })
+    return runExecute({
+      message: lastMessageRef.current,
+      label: 'Trying again…',
+      attachmentIds: lastAttachmentIdsRef.current,
+      attachmentsMeta: lastAttachmentsMetaRef.current,
+    })
   }, [runExecute])
 
   return { turns, isProcessing, processingLabel, send, selectCandidate, respondApproval, retryLast }

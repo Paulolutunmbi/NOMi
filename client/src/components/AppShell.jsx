@@ -1,12 +1,13 @@
-import { NavLink } from 'react-router-dom'
+import { Link, NavLink } from 'react-router-dom'
 import NomiLogo, { NomiMark } from './NomiLogo'
 import NetworkBanner from './NetworkBanner'
+import { useAuth } from '../context/AuthContext'
 
 const NAV_ITEMS = [
-  { to: '/', label: 'Home', icon: HomeIcon },
-  { to: '/gmail', label: 'Gmail', icon: MailIcon },
-  { to: '/calendar', label: 'Calendar', icon: CalendarIcon },
-  { to: '/settings', label: 'Settings', icon: SettingsIcon },
+  { to: '/app', label: 'Home', icon: HomeIcon },
+  { to: '/app/gmail', label: 'Gmail', icon: MailIcon },
+  { to: '/app/calendar', label: 'Calendar', icon: CalendarIcon },
+  { to: '/app/settings', label: 'Settings', icon: SettingsIcon },
 ]
 
 function HomeIcon(props) {
@@ -26,7 +27,7 @@ function NavItem({ to, label, icon: Icon, className }) {
   return (
     <NavLink
       to={to}
-      end={to === '/'}
+      end={to === '/app'}
       className={({ isActive }) =>
         `flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
           isActive ? 'bg-nomi-orange-tint text-nomi-orange-dark' : 'text-ink-soft hover:bg-surface-sunken hover:text-ink'
@@ -39,10 +40,27 @@ function NavItem({ to, label, icon: Icon, className }) {
   )
 }
 
+function GoogleDisconnectedBanner() {
+  const { googleConnected, googleStatusLoading } = useAuth()
+  if (googleStatusLoading || googleConnected) return null
+  return (
+    <div
+      role="status"
+      className="flex flex-wrap items-center justify-center gap-2 bg-warning-tint px-4 py-2 text-center text-xs font-medium text-warning"
+    >
+      <span>Google isn't connected — Gmail and Calendar actions won't work yet.</span>
+      <Link to="/app/settings" className="underline hover:no-underline">
+        Connect in Settings
+      </Link>
+    </div>
+  )
+}
+
 export default function AppShell({ children, userLabel, onSignOut }) {
   return (
     <div className="flex h-svh flex-col bg-surface-muted">
       <NetworkBanner />
+      <GoogleDisconnectedBanner />
       <div className="flex flex-1 overflow-hidden">
         {/* Desktop sidebar */}
         <aside className="hidden w-60 shrink-0 flex-col border-r border-line bg-surface p-4 sm:flex">

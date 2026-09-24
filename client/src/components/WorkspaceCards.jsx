@@ -166,7 +166,7 @@ function MessagePreview({ message }) {
 // strips draftId/messageId/threadId, and the Gmail provider returns no
 // content fields for draft/send at all) — so this shows the outcome the
 // server actually confirmed, not fabricated email text.
-function DraftOrSendConfirmation({ action }) {
+function DraftOrSendConfirmation({ action, attachmentsMeta }) {
   const isSend = action.includes('send')
   return (
     <div className="nomi-enter flex items-start gap-3 rounded-xl border border-success/30 bg-success-tint p-3.5">
@@ -178,12 +178,18 @@ function DraftOrSendConfirmation({ action }) {
         <p className="mt-0.5 text-xs text-ink-soft">
           {isSend ? 'It went out just now.' : 'Open Gmail to review the exact wording before it goes out.'}
         </p>
+        {attachmentsMeta?.length > 0 && (
+          <p className="mt-1 text-xs text-ink-faint">
+            With {attachmentsMeta.length} attachment{attachmentsMeta.length > 1 ? 's' : ''}:{' '}
+            {attachmentsMeta.map((a) => a.filename).join(', ')}
+          </p>
+        )}
       </div>
     </div>
   )
 }
 
-export function SuccessCard({ action, result }) {
+export function SuccessCard({ action, result, attachmentsMeta }) {
   if (action === 'gmail.search' && Array.isArray(result?.messages)) {
     if (!result.messages.length) return <EmptyInline text="No matching emails found." />
     return <div className="nomi-enter space-y-2">{result.messages.map((m, i) => <MessagePreview key={i} message={m} />)}</div>
@@ -192,7 +198,7 @@ export function SuccessCard({ action, result }) {
     return <div className="nomi-enter"><MessagePreview message={result.message} /></div>
   }
   if (['gmail.draft', 'gmail.send', 'gmail.draft.reply', 'gmail.send.reply', 'gmail.draft.edit'].includes(action)) {
-    return <DraftOrSendConfirmation action={action} />
+    return <DraftOrSendConfirmation action={action} attachmentsMeta={attachmentsMeta} />
   }
   if (action === 'calendar.search' && Array.isArray(result?.events)) {
     if (!result.events.length) return <EmptyInline text="No calendar events found." />

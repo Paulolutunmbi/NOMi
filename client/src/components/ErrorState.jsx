@@ -8,6 +8,23 @@ const COPY = {
     body: 'Reconnect Google so NOMI can keep working on your behalf.',
     cta: 'Reconnect Google',
   },
+  forbidden: {
+    title: "NOMI doesn't have permission for that",
+    body: 'This may need a Google permission that hasn\'t been granted yet. Reconnecting Google can fix this.',
+    cta: 'Reconnect Google',
+  },
+  notFound: {
+    title: "NOMI couldn't find that",
+    body: "That item may have been moved, deleted, or already handled.",
+  },
+  clientError: {
+    title: "That request didn't go through",
+    body: 'Something about the request was invalid. Try rephrasing it.',
+  },
+  rateLimited: {
+    title: 'NOMI is handling a lot right now',
+    body: 'Wait a moment and try again.',
+  },
   server: {
     title: 'Something went wrong on our side',
     body: 'NOMI ran into a problem handling that. Give it another try.',
@@ -24,7 +41,7 @@ const COPY = {
 
 export default function ErrorState({ kind = 'server', onRetry, onReconnect }) {
   const copy = COPY[kind] || COPY.server
-  const isAuth = kind === 'auth'
+  const needsReconnect = Boolean(copy.cta)
   return (
     <div className="nomi-enter flex items-start gap-3 rounded-xl border border-danger/30 bg-danger-tint p-3.5">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="mt-0.5 shrink-0 text-danger" aria-hidden="true">
@@ -35,10 +52,10 @@ export default function ErrorState({ kind = 'server', onRetry, onReconnect }) {
         <p className="mt-0.5 text-xs text-ink-soft">{copy.body}</p>
         <button
           type="button"
-          onClick={isAuth ? onReconnect : onRetry}
+          onClick={needsReconnect ? onReconnect : onRetry}
           className="mt-2.5 rounded-lg bg-ink px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-ink-soft"
         >
-          {isAuth ? 'Reconnect Google' : 'Try again'}
+          {needsReconnect ? copy.cta : 'Try again'}
         </button>
       </div>
     </div>

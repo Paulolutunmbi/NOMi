@@ -38,6 +38,44 @@
   color-scheme: light;
 }
 
+/* ==========================================================================
+   Dark theme — near-black surfaces, light text, orange accents.
+   Components already style themselves entirely through the semantic tokens
+   above (bg-surface, text-ink, border-line, …), so redefining those same
+   custom properties here is enough to re-theme the whole app — this is not
+   a naive inversion of the light palette.
+   ========================================================================== */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --color-nomi-orange: #ff7d3d;
+  --color-nomi-orange-dark: #ff9a5c;
+  --color-nomi-orange-light: #3a2414;
+  --color-nomi-orange-tint: #2b1c10;
+
+  --color-surface: #1b1916;
+  --color-surface-muted: #121110;
+  --color-surface-sunken: #242220;
+
+  --color-ink: #f4f1ec;
+  --color-ink-soft: #cac3b8;
+  --color-ink-faint: #8b8479;
+
+  --color-line: #2d2a26;
+  --color-line-strong: #3c3833;
+
+  --color-success: #4fd07f;
+  --color-success-tint: #16281d;
+  --color-warning: #f0b955;
+  --color-warning-tint: #2e2410;
+  --color-danger: #f27568;
+  --color-danger-tint: #301715;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 1px rgba(0, 0, 0, 0.24);
+  --shadow-card-hover: 0 6px 16px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.28);
+  --shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
 * {
   box-sizing: border-box;
 }

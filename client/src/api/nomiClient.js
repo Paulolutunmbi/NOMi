@@ -62,13 +62,36 @@ async function request(path, { method = 'GET', body, signal } = {}) {
  * The single endpoint that drives every Gmail and Calendar workflow.
  * `approval` is only sent once NOMI has asked for one:
  * 'allow_once' | 'always_allow' | 'deny'.
+ * `attachmentIds` are ids returned by uploadAttachment(), for a draft/send
+ * that should include one or more images.
  */
-export function executeAiAction({ conversationId, message, approval, signal }) {
+export function executeAiAction({ conversationId, message, approval, attachmentIds, signal }) {
   return request('/api/ai/execute', {
     method: 'POST',
-    body: { conversationId, message, ...(approval ? { approval } : {}) },
+    body: {
+      conversationId,
+      message,
+      ...(approval ? { approval } : {}),
+      ...(attachmentIds?.length ? { attachmentIds } : {}),
+    },
     signal,
   })
+}
+
+/**
+ * Uploads one image (as a data: URL string from FileReader) for staging.
+ * Returns { id, filename, mimeType, size } — never the raw bytes back.
+ */
+export function uploadAttachment({ filename, mimeType, data, signal }) {
+  return request('/api/attachments/upload', {
+    method: 'POST',
+    body: { filename, mimeType, data },
+    signal,
+  })
+}
+
+export function deleteAttachment(attachmentId) {
+  return request(`/api/attachments/${encodeURIComponent(attachmentId)}`, { method: 'DELETE' })
 }
 
 export function fetchPermissions() {
@@ -92,4 +115,12 @@ export async function getGoogleConnectUrl() {
 
 export function disconnectGoogle() {
   return request('/api/integrations/google', { method: 'DELETE' })
+}
+
+export function fetchMe() {
+  return request('/api/auth/me')
+}
+
+export function logoutNomi() {
+  return request('/api/auth/logout', { method: 'POST' })
 }
