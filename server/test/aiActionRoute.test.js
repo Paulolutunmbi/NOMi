@@ -1,7 +1,14 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const express = require("express");
-const { createAIActionRouter } = require("../src/routes/aiActionRoutes");
+const { createAIActionRouter, explicitRecipient, explicitBody } = require("../src/routes/aiActionRoutes");
+
+test("explicit recipient extraction preserves a typed address for deterministic Gmail drafts", () => {
+  assert.equal(explicitRecipient("Tell him I am good, him paulolutunmbi0@gmail.com"), "paulolutunmbi0@gmail.com");
+  assert.equal(explicitRecipient("Send it to <PAUL@example.com>"), "paul@example.com");
+  assert.equal(explicitRecipient("Draft a note to Paul"), null);
+  assert.equal(explicitBody("Tell this person that I am good, him [paul@example.com](mailto:paul@example.com)"), "I am good");
+});
 
 const parameters = (values = {}) => ({
   body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null,
@@ -67,6 +74,29 @@ test("draft_created follow-ups plan an edit, while selections and trusted sends 
   await send.request("send it");
   assert.equal(send.gatewayCalls.length, 0);
   assert.equal(send.executeCalls[0].proposal, null);
+});
+
+test("Start New Email click resumes trusted no-history state without planner clarification", async (t) => {
+  const route = await harness({
+    pendingInteraction: { stage: "no_history", action: "gmail.draft.reply", body: "I am good.", selectedIdentity: { name: "Paul", email: "paul@example.com" } },
+    messages: [],
+  }, { action: "clarification", parameters: parameters({ body: "Who would you like to email?" }) });
+  t.after(route.close);
+  const response = await route.request("start_new_email");
+  assert.equal(response.status, 200);
+  assert.equal(route.gatewayCalls.length, 0);
+  assert.equal(route.executeCalls[0].proposal, null);
+});
+
+test("trusted clicked person deterministically supplies recipient when planner asks who", async (t) => {
+  const route = await harness({ trustedGmailPerson: { name: "Paul", email: "paul@example.com" }, messages: [] },
+    { action: "clarification", parameters: parameters({ body: "Who would you like to send this to?" }) });
+  t.after(route.close);
+  await route.request("Tell him I am good.");
+  assert.equal(route.gatewayCalls.length, 1);
+  assert.equal(route.executeCalls[0].proposal.action, "gmail.draft");
+  assert.equal(route.executeCalls[0].proposal.parameters.recipient, "paul@example.com");
+  assert.equal(route.executeCalls[0].proposal.parameters.body, "I am good");
 });
 
 test("public execute route forwards a calendar proposal instead of treating it as invalid context", async (t) => {

@@ -44,7 +44,7 @@ function AttachmentChip({ attachment, onRemove }) {
   )
 }
 
-export default function Composer({ placeholder, disabled, onSend }) {
+export default function Composer({ placeholder, disabled, onSend, chatId }) {
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
   const [attachments, setAttachments] = useState([])
@@ -59,7 +59,7 @@ export default function Composer({ placeholder, disabled, onSend }) {
   const uploadOne = async (clientId, file) => {
     try {
       const dataUrl = await readFileAsDataUrl(file)
-      const { attachment } = await uploadAttachment({ filename: file.name, mimeType: file.type, data: dataUrl })
+      const { attachment } = await uploadAttachment({ filename: file.name, mimeType: file.type, data: dataUrl, chatId })
       updateAttachment(clientId, {
         status: 'ready',
         serverId: attachment.id,

@@ -18,6 +18,8 @@ const temporaryConversationSchema = new mongoose.Schema({
   // Server-trusted target for reply actions (messageId, threadId, email, subject, etc.)
   // Never sourced from the client or model.
   trustedTarget: { type: mongoose.Schema.Types.Mixed, default: null },
+  // Set only by a server-resolved clickable identity selection.
+  trustedGmailPerson: { type: mongoose.Schema.Types.Mixed, default: null },
   // Server-trusted draft context for "send it" style follow-ups.
   // draftId, threadId, messageId, recipient, subject, action are persisted here.
   // Never sourced from the client or model.
@@ -34,6 +36,7 @@ const temporaryConversationSchema = new mongoose.Schema({
   // before calendar.read/update/delete may reference an eventId.
   calendarEventIds: { type: [String], default: [] },
   calendarCandidates: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  trustedCalendarEvent: { type: mongoose.Schema.Types.Mixed, default: null },
   placeholderMappings: { type: Map, of: mongoose.Schema.Types.Mixed, default: {} },
   expiresAt: { type: Date, required: true, index: { expires: 0 } },
 }, { timestamps: true });

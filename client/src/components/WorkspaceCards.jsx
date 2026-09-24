@@ -26,10 +26,11 @@ function CandidateButton({ onClick, disabled, children }) {
   )
 }
 
-export function IdentityCandidates({ candidates, onSelect, disabled }) {
+export function IdentityCandidates({ candidates, onSelect, disabled, selectedIdentity }) {
   return (
     <div className="nomi-enter space-y-2">
       <p className="text-sm font-medium text-ink">Which person do you mean?</p>
+      {selectedIdentity && <p className="text-xs text-ink-faint">Selected person: {selectedIdentity.name || selectedIdentity.email} &lt;{selectedIdentity.email}&gt;</p>}
       <div className="space-y-2" role="list" aria-label="Identity candidates">
         {candidates.map((c) => (
           <CandidateButton key={c.selectionId} onClick={() => onSelect(c.selectionId)} disabled={disabled}>
@@ -45,10 +46,11 @@ export function IdentityCandidates({ candidates, onSelect, disabled }) {
   )
 }
 
-export function ConversationCandidates({ candidates, onSelect, disabled }) {
+export function ConversationCandidates({ candidates, onSelect, disabled, selectedIdentity }) {
   return (
     <div className="nomi-enter space-y-2">
       <p className="text-sm font-medium text-ink">Which conversation?</p>
+      {selectedIdentity && <p className="text-xs text-ink-faint">Selected person: {selectedIdentity.name || selectedIdentity.email} &lt;{selectedIdentity.email}&gt;</p>}
       <div className="space-y-2" role="list" aria-label="Conversation candidates">
         {candidates.map((c) => (
           <CandidateButton key={c.selectionId} onClick={() => onSelect(c.selectionId)} disabled={disabled}>
@@ -73,7 +75,7 @@ export function CalendarCandidates({ candidates, onSelect, disabled, title = 'Wh
       <p className="text-sm font-medium text-ink">{title}</p>
       <div className="space-y-2" role="list" aria-label="Calendar candidates">
         {candidates.map((c) => (
-          <CandidateButton key={c.selectionId} onClick={() => onSelect?.(c.selectionId)} disabled={disabled || !onSelect}>
+          <CandidateButton key={c.selectionId} onClick={() => onSelect?.(`calendar_select:${c.selectionId}`)} disabled={disabled || !onSelect}>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-semibold text-ink">{c.summary}</span>
               <span className="mt-0.5 block truncate text-xs text-ink-faint">
@@ -166,7 +168,7 @@ function MessagePreview({ message }) {
 // strips draftId/messageId/threadId, and the Gmail provider returns no
 // content fields for draft/send at all) — so this shows the outcome the
 // server actually confirmed, not fabricated email text.
-function DraftOrSendConfirmation({ action, attachmentsMeta }) {
+function DraftOrSendConfirmation({ action, attachmentsMeta, selectedIdentity, selectedConversation }) {
   const isSend = action.includes('send')
   return (
     <div className="nomi-enter flex items-start gap-3 rounded-xl border border-success/30 bg-success-tint p-3.5">
@@ -178,6 +180,8 @@ function DraftOrSendConfirmation({ action, attachmentsMeta }) {
         <p className="mt-0.5 text-xs text-ink-soft">
           {isSend ? 'It went out just now.' : 'Open Gmail to review the exact wording before it goes out.'}
         </p>
+        {selectedIdentity && <p className="mt-1 text-xs text-ink-faint">Selected person: {selectedIdentity.name || selectedIdentity.email} &lt;{selectedIdentity.email}&gt;</p>}
+        {selectedConversation && <p className="mt-1 text-xs text-ink-faint">Selected conversation: {selectedConversation.subject}</p>}
         {attachmentsMeta?.length > 0 && (
           <p className="mt-1 text-xs text-ink-faint">
             With {attachmentsMeta.length} attachment{attachmentsMeta.length > 1 ? 's' : ''}:{' '}
@@ -189,7 +193,13 @@ function DraftOrSendConfirmation({ action, attachmentsMeta }) {
   )
 }
 
-export function SuccessCard({ action, result, attachmentsMeta }) {
+export function SuccessCard({ action, result, attachmentsMeta, selectedIdentity, selectedConversation, onSelectCandidate }) {
+  if (action === 'gmail.person.selected' && selectedIdentity) {
+    return <div className="nomi-enter rounded-xl border border-line bg-surface p-4"><p className="text-sm font-medium text-ink">Selected person</p><p className="mt-1 text-sm text-ink-soft">{selectedIdentity.name || selectedIdentity.email} &lt;{selectedIdentity.email}&gt;</p><p className="mt-2 text-xs text-ink-faint">Tell NOMI what you would like to say.</p></div>
+  }
+  if (action === 'gmail.conversation.selected' && selectedIdentity && selectedConversation) {
+    return <div className="nomi-enter rounded-xl border border-line bg-surface p-4"><p className="text-sm font-medium text-ink">Selected person</p><p className="text-sm text-ink-soft">{selectedIdentity.name || selectedIdentity.email} &lt;{selectedIdentity.email}&gt;</p><p className="mt-2 text-sm font-medium text-ink">Selected conversation</p><p className="text-sm text-ink-soft">{selectedConversation.subject}</p></div>
+  }
   if (action === 'gmail.search' && Array.isArray(result?.messages)) {
     if (!result.messages.length) return <EmptyInline text="No matching emails found." />
     return <div className="nomi-enter space-y-2">{result.messages.map((m, i) => <MessagePreview key={i} message={m} />)}</div>
@@ -198,12 +208,13 @@ export function SuccessCard({ action, result, attachmentsMeta }) {
     return <div className="nomi-enter"><MessagePreview message={result.message} /></div>
   }
   if (['gmail.draft', 'gmail.send', 'gmail.draft.reply', 'gmail.send.reply', 'gmail.draft.edit'].includes(action)) {
-    return <DraftOrSendConfirmation action={action} attachmentsMeta={attachmentsMeta} />
+    return <DraftOrSendConfirmation action={action} attachmentsMeta={attachmentsMeta} selectedIdentity={selectedIdentity} selectedConversation={selectedConversation} />
   }
   if (action === 'calendar.search' && Array.isArray(result?.events)) {
     if (!result.events.length) return <EmptyInline text="No calendar events found." />
-    return <div className="nomi-enter space-y-2">{result.events.map((e, i) => <EventCard key={i} event={e} />)}</div>
+    return <CalendarCandidates candidates={result.events} onSelect={onSelectCandidate} title="Select an event to establish trusted action context" />
   }
+  if (action === 'calendar.selected' && result?.event) return <div className="nomi-enter space-y-2"><p className="text-xs text-ink-faint">Selected event</p><EventCard event={result.event} /></div>
   if ((action === 'calendar.create' || action === 'calendar.update' || action === 'calendar.read') && result?.event) {
     return (
       <div className="nomi-enter space-y-2">

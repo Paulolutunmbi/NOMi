@@ -51,10 +51,17 @@ export default function ChatMessage({ turn, isLatest, onSelectCandidate, onDecid
           <p className="rounded-2xl rounded-tl-sm border border-line bg-surface px-4 py-2.5 text-[15px] text-ink-faint">Okay, cancelled.</p>
         )}
         {turn.kind === 'ambiguous_identity' && (
-          <IdentityCandidates candidates={turn.candidates} onSelect={onSelectCandidate} disabled={!interactive} />
+          <IdentityCandidates candidates={turn.candidates} onSelect={onSelectCandidate} disabled={!interactive} selectedIdentity={turn.selectedIdentity} />
         )}
         {turn.kind === 'ambiguous_message' && (
-          <ConversationCandidates candidates={turn.candidates} onSelect={onSelectCandidate} disabled={!interactive} />
+          <ConversationCandidates candidates={turn.candidates} onSelect={onSelectCandidate} disabled={!interactive} selectedIdentity={turn.selectedIdentity} />
+        )}
+        {turn.kind === 'no_previous_conversation' && (
+          <div className="nomi-enter space-y-3 rounded-xl border border-line bg-surface p-4">
+            {turn.selectedIdentity && <p className="text-sm font-medium text-ink">Selected person: {turn.selectedIdentity.name || turn.selectedIdentity.email} <span className="font-normal text-ink-faint">&lt;{turn.selectedIdentity.email}&gt;</span></p>}
+            <p className="text-sm text-ink-soft">No previous conversation.</p>
+            <button type="button" disabled={!interactive} onClick={() => onSelectCandidate('start_new_email')} className="rounded-lg bg-nomi-orange px-3.5 py-2 text-sm font-medium text-white hover:bg-nomi-orange-dark disabled:opacity-60">Start new email</button>
+          </div>
         )}
         {turn.kind === 'calendar_candidates' && (
           <CalendarCandidates candidates={turn.candidates} disabled />
@@ -62,7 +69,7 @@ export default function ChatMessage({ turn, isLatest, onSelectCandidate, onDecid
         {turn.kind === 'approval_required' && (
           <ApprovalCard action={turn.action} onDecide={onDecideApproval} disabled={!interactive} />
         )}
-        {turn.kind === 'success' && <SuccessCard action={turn.action} result={turn.result} attachmentsMeta={turn.attachmentsMeta} />}
+        {turn.kind === 'success' && <SuccessCard action={turn.action} result={turn.result} attachmentsMeta={turn.attachmentsMeta} selectedIdentity={turn.selectedIdentity} selectedConversation={turn.selectedConversation} onSelectCandidate={onSelectCandidate} />}
         {turn.kind === 'error' && <ErrorState kind={turn.errorKind} onRetry={onRetry} onReconnect={onReconnect} />}
       </div>
     </div>

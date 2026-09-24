@@ -7,14 +7,15 @@ import { useNomiConversation } from '../hooks/useNomiConversation'
 import { getGoogleConnectUrl } from '../api/nomiClient'
 
 export default function Workspace({
+  workspaceType,
   conversationId,
   placeholder,
   emptyTitle,
   emptyBody,
   suggestions = [],
 }) {
-  const { turns, isProcessing, processingLabel, send, selectCandidate, respondApproval, retryLast } =
-    useNomiConversation(conversationId)
+  const { turns, chatId, isProcessing, processingLabel, send, selectCandidate, respondApproval, retryLast } =
+    useNomiConversation(workspaceType)
   const scrollRef = useRef(null)
 
   useEffect(() => {
@@ -54,7 +55,7 @@ export default function Workspace({
         </div>
       )}
       <div className="border-t border-line bg-surface-muted p-3 sm:p-4">
-        <Composer placeholder={placeholder} disabled={isProcessing} onSend={send} />
+        <Composer placeholder={placeholder} disabled={isProcessing} onSend={send} chatId={chatId} />
       </div>
     </div>
   )

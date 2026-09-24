@@ -15,11 +15,12 @@ export class NomiNetworkError extends Error {
 // so the UI can pick the right error state without ever showing raw
 // backend payloads to the user.
 export class NomiApiError extends Error {
-  constructor(status, code, message) {
+  constructor(status, code, message, details = null) {
     super(message || 'NOMI_API_ERROR')
     this.name = 'NomiApiError'
     this.status = status
     this.code = code || 'UNKNOWN'
+    this.details = details
   }
 }
 
@@ -48,10 +49,17 @@ async function request(path, { method = 'GET', body, signal } = {}) {
 
   if (!response.ok) {
     const errorPayload = data?.error
+    const outcome = data?.outcome
+    const code = errorPayload?.code || (outcome?.status === 'rejected' ? 'ACTION_REJECTED' : undefined)
+    const details = errorPayload || outcome || null
+    if (import.meta.env.DEV) {
+      console.warn(`[NOMI API] ${method} ${path} returned ${response.status}`, { code, details })
+    }
     throw new NomiApiError(
       response.status,
-      errorPayload?.code,
-      errorPayload?.message || data?.message,
+      code,
+      errorPayload?.message || data?.message || (outcome?.status === 'rejected' ? 'NOMI rejected this action.' : undefined),
+      details,
     )
   }
 
@@ -78,14 +86,26 @@ export function executeAiAction({ conversationId, message, approval, attachmentI
   })
 }
 
+export function getOrCreateChat(type) {
+  return request('/api/chats', { method: 'POST', body: { type } })
+}
+
+export function fetchChatMessages(chatId) {
+  return request(`/api/chats/${encodeURIComponent(chatId)}/messages`)
+}
+
+export function saveChatMessage(chatId, { role, content, metadata }) {
+  return request(`/api/chats/${encodeURIComponent(chatId)}/messages`, { method: 'POST', body: { role, content, metadata } })
+}
+
 /**
  * Uploads one image (as a data: URL string from FileReader) for staging.
  * Returns { id, filename, mimeType, size } — never the raw bytes back.
  */
-export function uploadAttachment({ filename, mimeType, data, signal }) {
+export function uploadAttachment({ filename, mimeType, data, chatId, signal }) {
   return request('/api/attachments/upload', {
     method: 'POST',
-    body: { filename, mimeType, data },
+    body: { filename, mimeType, data, ...(chatId ? { chatId } : {}) },
     signal,
   })
 }

@@ -12,6 +12,8 @@ const { createAIActionRouter } = require("./routes/aiActionRoutes");
 const { createPermissionRouter } = require("./routes/permissionRoutes");
 const { createAuthRouter } = require("./routes/authRoutes");
 const { createAttachmentRouter } = require("./routes/attachmentRoutes");
+const { createChatRouter } = require("./routes/chatRoutes");
+const { cleanupExpiredAttachments } = require("./services/attachments/attachmentService");
 
 const app = express();
 
@@ -22,6 +24,7 @@ app.use(cors());
 app.use("/api/ai/attachments", createAttachmentRouter());
 app.use("/api/attachments", createAttachmentRouter());
 app.use(express.json({ limit: "16kb" }));
+app.use("/api/chats", createChatRouter());
 app.use("/api/auth", createAuthRouter());
 app.use("/api/integrations/google", googleIntegrationRoutes);
 app.use("/api/ai", createAIIntentRouter());
@@ -49,6 +52,8 @@ const PORT = process.env.PORT || 5000;
 const startServer = async () => {
   try {
     await connectDatabase();
+    const attachmentCleanup = setInterval(() => cleanupExpiredAttachments().catch(() => {}), 10 * 60 * 1000);
+    attachmentCleanup.unref();
 
     app.listen(PORT, () => {
       console.log(`NOMI API running on port ${PORT}`);

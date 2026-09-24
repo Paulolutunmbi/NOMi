@@ -1,6 +1,6 @@
 "use strict";
 
-const { describe, it, before, afterEach } = require("node:test");
+const { describe, it, before, afterEach, test } = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
@@ -20,6 +20,8 @@ const {
   removeAttachments,
   clearAllForTesting,
 } = require("../src/services/attachments/attachmentService");
+const AttachmentReference = require("../src/models/AttachmentReference");
+const { cloudinaryUpload } = require("../src/services/attachments/attachmentService");
 
 // ─── Minimal valid image buffers ──────────────────────────────────────────────
 // 12-byte PNG magic header followed by padding zeros
@@ -280,6 +282,18 @@ describe("attachmentService", () => {
     assert.equal(result, null, "cross-user access must be denied");
   });
 
+  it("rejects an expired staged attachment", async () => {
+    const realNow = Date.now;
+    let now = realNow();
+    Date.now = () => now;
+    try {
+      const stored = await storeAttachment({ user: FAKE_USER, filename: "old.png", mimeType: "image/png", data: toDataUrl(PNG_MAGIC, "image/png") });
+      now += 3 * 60 * 60 * 1000;
+      assert.equal(await getAttachment({ user: FAKE_USER, attachmentId: stored.id }), null);
+      await assert.rejects(() => getAttachmentsForUser({ user: FAKE_USER, attachmentIds: [stored.id] }), { code: "attachment_not_found" });
+    } finally { Date.now = realNow; }
+  });
+
   it("getAttachmentsForUser returns resolved attachments with buffer for internal use", async () => {
     const a = await storeAttachment({ user: FAKE_USER, filename: "a.png", mimeType: "image/png", data: toDataUrl(PNG_MAGIC, "image/png") });
     const b = await storeAttachment({ user: FAKE_USER, filename: "b.jpg", mimeType: "image/jpeg", data: toDataUrl(JPEG_MAGIC, "image/jpeg") });
@@ -366,4 +380,33 @@ describe("attachmentService", () => {
       },
     );
   });
+});
+
+test("Cloudinary attachment metadata schema cannot store raw bytes", () => {
+  assert.equal(AttachmentReference.schema.path("buffer"), undefined);
+  assert.equal(AttachmentReference.schema.path("data"), undefined);
+  assert.ok(AttachmentReference.schema.path("secureUrl"));
+  assert.ok(AttachmentReference.schema.path("publicId"));
+});
+
+test("Cloudinary upload uses backend credentials and returns only a Cloudinary reference", async () => {
+  const previous = process.env.CLOUDINARY_URL;
+  const oldFetch = global.fetch;
+  process.env.CLOUDINARY_URL = "cloudinary://test-key:test-secret@demo-cloud";
+  let form;
+  global.fetch = async (_url, options) => {
+    form = options.body;
+    return { ok: true, json: async () => ({ public_id: "nomi-attachments/test-id", secure_url: "https://res.cloudinary.com/demo/image/upload/test.png", resource_type: "image", bytes: 20 }) };
+  };
+  try {
+    const result = await cloudinaryUpload({ id: "test-id", filename: "test.png", mimeType: "image/png", buffer: Buffer.from("png bytes") });
+    assert.equal(result.public_id, "nomi-attachments/test-id");
+    assert.equal(form.get("api_key"), "test-key");
+    assert.equal(form.get("file").name, "test.png");
+    assert.equal(JSON.stringify(result).includes("test-secret"), false);
+  } finally {
+    global.fetch = oldFetch;
+    if (previous === undefined) delete process.env.CLOUDINARY_URL;
+    else process.env.CLOUDINARY_URL = previous;
+  }
 });

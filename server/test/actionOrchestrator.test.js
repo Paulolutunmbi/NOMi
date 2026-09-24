@@ -45,7 +45,7 @@ test("reply disambiguation is identity-first, then searches only the selected ac
   assert.equal(first.candidates.some((c) => c.subject === "A project"), false);
   const second = await orchestrator.execute({ user, conversationId: "c", message: "the second one", proposal: null });
   assert.equal(second.status, "ambiguous_message");
-  assert.equal(calls[1].payload.query, "from:paul.b@example.com");
+  assert.equal(calls[1].payload.query, "{from:paul.b@example.com to:paul.b@example.com}");
   assert.deepEqual(second.candidates.map((c) => c.email), ["paul.b@example.com", "paul.b@example.com"]);
   assert.equal(second.candidates.some((c) => c.subject === "Must not appear"), false);
   assert.equal(second.candidates[1].subject, "No subject");
@@ -56,6 +56,108 @@ test("reply disambiguation is identity-first, then searches only the selected ac
   assert.equal(sent.status, "success");
   assert.equal(calls[3].action, "gmail.send.reply");
   assert.equal(calls[3].payload.messageId, "b-2");
+});
+
+test("single Gmail identity is clickable, no-history Start New Email retains trusted recipient through draft/send", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], retrievedContext: [] };
+  const calls = [];
+  const executor = async (input) => {
+    calls.push(input);
+    if (input.action === "gmail.search" && calls.length === 1) return { status: "success", result: { messages: [
+      { id: "body-mention", from: { name: "Other Person", email: "other@example.com" }, subject: "Mentions Paul" },
+      { id: "paul-mail", from: { name: "Paul Olutunmbi", email: "paulolutunmbi0@gmail.com" }, subject: "Hi" },
+    ] } };
+    if (input.action === "gmail.search") return { status: "success", result: { messages: [] } };
+    return { status: "success", result: { draftId: "draft-trusted", messageId: "message-trusted" } };
+  };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: executor });
+  const initial = await orchestrator.execute({ user, conversationId: "gmail-chat", message: "Tell Paul that I am good", proposal: { action: "gmail.search_then_reply", parameters: params({ query: "Paul", body: "I am good" }) } });
+  assert.equal(initial.status, "ambiguous_identity");
+  assert.equal(initial.candidates[0].email, "paulolutunmbi0@gmail.com");
+  assert.equal(initial.candidates.some((candidate) => candidate.email === "other@example.com"), false);
+  const selected = await orchestrator.execute({ user, conversationId: "gmail-chat", message: "1", proposal: null, conversation: record });
+  assert.equal(selected.status, "no_previous_conversation");
+  assert.equal(record.pendingInteraction.stage, "no_history");
+  const started = await orchestrator.execute({ user, conversationId: "gmail-chat", message: "start_new_email", proposal: null, conversation: record });
+  assert.equal(started.status, "success");
+  assert.equal(calls.at(-1).payload.recipient, "paulolutunmbi0@gmail.com");
+  assert.equal(record.trustedDraft.recipient, "paulolutunmbi0@gmail.com");
+  const edited = await orchestrator.execute({ user, conversationId: "gmail-chat", message: "make it more casual", proposal: { action: "gmail.draft.edit", parameters: params({ body: "Hey Paul, all good here." }) }, conversation: record });
+  assert.equal(edited.status, "success");
+  const sent = await orchestrator.execute({ user, conversationId: "gmail-chat", message: "send it", proposal: null, conversation: record });
+  assert.equal(sent.status, "success");
+  assert.equal(calls.at(-1).action, "gmail.send");
+  assert.equal(calls.at(-1).payload.recipient, "paulolutunmbi0@gmail.com");
+});
+
+test("Calendar mutations require a user-selected trusted event, not merely chat/search history", async () => {
+  const record = { calendarEventIds: [], calendarCandidates: [] };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async (input) => {
+    calls.push(input);
+    return input.action === "calendar.search" ? { status: "success", result: { events: [{ id: "event-secret", summary: "Design review", start: "2026-09-25T15:00:00Z", end: "2026-09-25T16:00:00Z" }] } } : { status: "success", result: { event: { id: "event-secret", summary: "Design review" } } };
+  } });
+  await orchestrator.execute({ user, conversationId: "cal", message: "tomorrow", proposal: { action: "calendar.search", parameters: params() } });
+  const forgedFromHistory = await orchestrator.execute({ user, conversationId: "cal", message: "move it", proposal: { action: "calendar.update", parameters: params({ eventId: "event-secret", summary: "Changed" }) }, conversation: record });
+  assert.equal(forgedFromHistory.status, "rejected");
+  const chosen = await orchestrator.execute({ user, conversationId: "cal", message: "calendar_select:1", proposal: null, conversation: record });
+  assert.equal(chosen.action, "calendar.selected");
+  const updated = await orchestrator.execute({ user, conversationId: "cal", message: "move it", proposal: { action: "calendar.update", parameters: params({ eventId: "event-secret", summary: "Changed" }) }, conversation: record });
+  assert.equal(updated.status, "success");
+});
+
+test("person selection groups messages by Gmail thread into clickable conversations", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], retrievedContext: [] };
+  let searches = 0;
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async () => {
+    searches += 1;
+    return { status: "success", result: { messages: searches === 1
+      ? [{ id: "p1", threadId: "thread-1", from: { name: "Paul", email: "paul@example.com" } }]
+      : [
+        { id: "p2", threadId: "thread-2", from: { name: "Paul", email: "paul@example.com" }, subject: "Files" },
+        { id: "p3", threadId: "thread-2", from: { name: "Paul", email: "paul@example.com" }, subject: "Re: Files" },
+      ] } };
+  } });
+  const person = await orchestrator.execute({ user, conversationId: "c", message: "Reply to Paul", proposal: { action: "gmail.search_then_reply", parameters: params({ query: "Paul", body: "hello" }) } });
+  assert.equal(person.status, "ambiguous_identity");
+  const conversations = await orchestrator.execute({ user, conversationId: "c", message: "1", proposal: null, conversation: record });
+  assert.equal(conversations.status, "ambiguous_message");
+  assert.equal(conversations.candidates.length, 1);
+  assert.equal(conversations.candidates[0].subject, "Files");
+});
+
+test("generic Gmail person search never surfaces body-only matches and Start New Email retains clicked identity", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], retrievedContext: [] };
+  let searchCount = 0;
+  const calls = [];
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async (input) => {
+    calls.push(input); searchCount += 1;
+    if (searchCount === 1) return { status: "success", result: { messages: [
+      { id: "mention", from: { name: "Morgan", email: "morgan@example.com" }, subject: "Paul mentioned in body", snippet: "Paul" },
+      { id: "paul", from: { name: "Paul Olutunmbi", email: "paul@example.com" }, subject: "Hi" },
+    ] } };
+    return { status: "success", result: { messages: [] } };
+  } });
+  const found = await orchestrator.execute({ user, conversationId: "gmail", message: "Search Gmail for Paul", proposal: { action: "gmail.search", parameters: params({ query: "Paul" }) } });
+  assert.equal(found.status, "ambiguous_identity");
+  assert.deepEqual(found.candidates.map((candidate) => candidate.email), ["paul@example.com"]);
+  const noThread = await orchestrator.execute({ user, conversationId: "gmail", message: "1", proposal: null, conversation: record });
+  assert.equal(noThread.status, "no_previous_conversation");
+  const selected = await orchestrator.execute({ user, conversationId: "gmail", message: "start_new_email", proposal: null, conversation: record });
+  assert.equal(selected.action, "gmail.person.selected");
+  assert.equal(record.trustedGmailPerson.email, "paul@example.com");
+  const draft = await orchestrator.execute({ user, conversationId: "gmail", message: "Tell him I am good", proposal: { action: "gmail.draft", parameters: params({ recipient: "paul@example.com", body: "I am good" }) }, conversation: record });
+  assert.equal(draft.status, "success");
+  assert.equal(calls.at(-1).payload.recipient, "paul@example.com");
+});
+
+test("searching Paul returns no contact when Paul appears only in message body results", async () => {
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(), actionExecutor: async () => ({ status: "success", result: { messages: [
+    { id: "body-only", from: { name: "Morgan", email: "morgan@example.com" }, subject: "Paul mentioned", snippet: "Paul" },
+  ] } }) });
+  const result = await orchestrator.execute({ user, conversationId: "gmail", message: "Search Gmail for Paul", proposal: { action: "gmail.search", parameters: params({ query: "Paul" }) } });
+  assert.equal(result.status, "not_found");
+  assert.equal(JSON.stringify(result).includes("body-only"), false);
 });
 
 test("ambiguous selection uses stored candidate IDs and resumes the original reply", async () => {
@@ -92,7 +194,7 @@ test("search uses the injected trusted executor and stores provider-derived IDs 
   const calls = [];
   const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async (input) => { calls.push(input); return { status: "success", result: searchResult }; } });
   const result = await orchestrator.execute({ user, conversationId: "c1", message: "Find Aminat's email", proposal: { action: "gmail.search", parameters: params({ query: "from:Aminat" }) } });
-  assert.equal(result.status, "success");
+  assert.equal(result.status, "ambiguous_identity");
   assert.equal(calls[0].provider, "google");
   assert.equal(calls[0].action, "gmail.search");
   assert.deepEqual(record.gmailMessageIds, ["message-a"]);
@@ -346,14 +448,19 @@ test("search_then_reply — one safe candidate: search executes then draft.reply
   });
   assert.equal(calls[0].action, "gmail.search");
   assert.equal(calls[0].payload.query, "from:Paul");
-  assert.equal(calls[1].action, "gmail.draft.reply");
-  assert.equal(calls[1].payload.messageId, "msg-paul");
-  assert.equal(calls[1].payload.body, "I'll send the files tomorrow.");
-  assert.equal(result.status, "success");
-  assert.equal(result.action, "gmail.draft.reply");
+  assert.equal(result.status, "ambiguous_identity");
+  assert.equal(result.candidates[0].email, "paul@example.com");
+  const conversations = await orchestrator.execute({ user, conversationId: "c", message: "1", proposal: null, conversation: record });
+  assert.equal(conversations.status, "ambiguous_message");
+  const resultDraft = await orchestrator.execute({ user, conversationId: "c", message: "1", proposal: null, conversation: record });
+  assert.equal(calls[2].action, "gmail.draft.reply");
+  assert.equal(calls[2].payload.messageId, "msg-paul");
+  assert.equal(calls[2].payload.body, "I'll send the files tomorrow.");
+  assert.equal(resultDraft.status, "success");
+  assert.equal(resultDraft.action, "gmail.draft.reply");
   assert.deepEqual(record.gmailMessageIds, ["msg-paul"]);
   // Internal message ID must NOT appear in the response to the client
-  assert.equal(JSON.stringify(result).includes("msg-paul"), false);
+  assert.equal(JSON.stringify(resultDraft).includes("msg-paul"), false);
 });
 
 test("search_then_send_reply — send variant dispatches gmail.send.reply", async () => {
@@ -366,9 +473,12 @@ test("search_then_send_reply — send variant dispatches gmail.send.reply", asyn
     user, conversationId: "c", message: "Find Paul's email and send a reply saying I'll send the files tomorrow.",
     proposal: { action: "gmail.search_then_send_reply", parameters: params({ query: "from:Paul", body: "I'll send the files tomorrow." }) },
   });
-  assert.equal(calls[1].action, "gmail.send.reply");
-  assert.equal(result.status, "success");
-  assert.equal(result.action, "gmail.send.reply");
+  assert.equal(result.status, "ambiguous_identity");
+  await orchestrator.execute({ user, conversationId: "c", message: "1", proposal: null });
+  const sent = await orchestrator.execute({ user, conversationId: "c", message: "1", proposal: null });
+  assert.equal(calls[2].action, "gmail.send.reply");
+  assert.equal(sent.status, "success");
+  assert.equal(sent.action, "gmail.send.reply");
 });
 
 test("search_then_reply — multiple candidates: ambiguous_identity returned, NO reply", async () => {
@@ -435,11 +545,9 @@ test("search_then_reply — reply permission required: search succeeds but reply
     user, conversationId: "c", message: "Find Paul's email and reply saying I'll send the files tomorrow.",
     proposal: { action: "gmail.search_then_reply", parameters: params({ query: "from:Paul", body: "I'll send the files tomorrow." }) },
   });
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 1);
   assert.equal(calls[0].action, "gmail.search");
-  assert.equal(calls[1].action, "gmail.draft.reply");
-  assert.equal(result.status, "approval_required");
-  assert.equal(result.action, "gmail.draft.reply");
+  assert.equal(result.status, "ambiguous_identity");
 });
 
 test("search_then_reply — always_allow: completes end-to-end with no second prompt", async () => {
@@ -453,11 +561,15 @@ test("search_then_reply — always_allow: completes end-to-end with no second pr
     proposal: { action: "gmail.search_then_reply", parameters: params({ query: "from:Paul", body: "I'll send the files tomorrow." }) },
     approval: "always_allow",
   });
-  assert.equal(result.status, "success");
-  assert.equal(result.action, "gmail.draft.reply");
-  assert.equal(calls.length, 2);
+  assert.equal(result.status, "ambiguous_identity");
+  await orchestrator.execute({ user, conversationId: "c", message: "1", proposal: null, approval: "always_allow" });
+  const draft = await orchestrator.execute({ user, conversationId: "c", message: "1", proposal: null, approval: "always_allow" });
+  assert.equal(draft.status, "success");
+  assert.equal(draft.action, "gmail.draft.reply");
+  assert.equal(calls.length, 3);
   assert.equal(calls[0].approval, "always_allow");
   assert.equal(calls[1].approval, "always_allow");
+  assert.equal(calls[2].approval, "always_allow");
 });
 
 test("search_then_reply — prompt-injection in search result is treated as untrusted data only", async () => {
@@ -473,13 +585,11 @@ test("search_then_reply — prompt-injection in search result is treated as untr
     user, conversationId: "c", message: "Find Paul's email and reply saying I'll send the files tomorrow.",
     proposal: { action: "gmail.search_then_reply", parameters: params({ query: "from:Paul", body: "I'll send the files tomorrow." }) },
   });
-  assert.equal(result.status, "success");
-  assert.equal(result.action, "gmail.draft.reply");
-  assert.equal(calls[1].payload.messageId, "msg-paul-inject");
+  assert.equal(result.status, "ambiguous_identity");
   // Injected address must not appear in executor calls
   assert.equal(calls.some((c) => JSON.stringify(c).includes("attacker@evil.com")), false);
   // Reply body must be unchanged
-  assert.equal(calls[1].payload.body, "I'll send the files tomorrow.");
+  assert.equal(calls.length, 1);
 });
 
 test("search_then_reply — conversation context stores trusted target for follow-up pronoun reply", async () => {
@@ -490,11 +600,14 @@ test("search_then_reply — conversation context stores trusted target for follo
     actionExecutor: splitExecutor({ searchResult: { status: "success", result: paulSearchResult }, calls: calls1 }),
   });
   // First turn: compound search + draft reply
-  await orchestrator.execute({
+  const selected = await orchestrator.execute({
     user, conversationId: "c", message: "Find Paul's email and reply saying I'll send the files tomorrow.",
     proposal: { action: "gmail.search_then_reply", parameters: params({ query: "from:Paul", body: "I'll send the files tomorrow." }) },
     approval: "allow_once",
   });
+  assert.equal(selected.status, "ambiguous_identity");
+  await orchestrator.execute({ user, conversationId: "c", message: "1", proposal: null });
+  await orchestrator.execute({ user, conversationId: "c", message: "1", proposal: null });
   assert.deepEqual(record.gmailMessageIds, ["msg-paul"]);
   assert.equal(record.gmailCandidates[0].id, "msg-paul");
 
@@ -566,17 +679,20 @@ test("identity dedup: multiple messages from same person yields ambiguous_messag
     proposal: { action: "gmail.search_then_reply", parameters: params({ query: "from:Paul", body: "I'll check tomorrow." }) },
   });
   // Three messages from one person → we expect ambiguous_message (not ambiguous_identity).
-  assert.equal(result.status, "ambiguous_message");
-  assert.equal(result.candidates.length, 3, "all 3 message candidates exposed");
+  assert.equal(result.status, "ambiguous_identity");
+  assert.equal(result.candidates.length, 1, "one clickable person card is shown first");
+  const conversations = await orchestrator.execute({ user, conversationId: "c", message: "1", proposal: null });
+  assert.equal(conversations.status, "ambiguous_message");
+  assert.equal(conversations.candidates.length, 3, "all 3 conversation candidates follow person selection");
   // Every candidate must be the same person (same email + same name).
-  const uniqueEmails = [...new Set(result.candidates.map((c) => c.email))];
+  const uniqueEmails = [...new Set(conversations.candidates.map((c) => c.email))];
   assert.equal(uniqueEmails.length, 1);
-  const uniqueNames = [...new Set(result.candidates.map((c) => c.name))];
+  const uniqueNames = [...new Set(conversations.candidates.map((c) => c.name))];
   assert.equal(uniqueNames.length, 1);
   // Prompt must reference "multiple messages" / "which conversation" (message-level wording).
-  assert.match(result.prompt.toLowerCase(), /(multiple messages|which conversation)/);
+  assert.match(conversations.prompt.toLowerCase(), /(multiple messages|which conversation)/);
   // Candidates MUST have selectionId (clickable UI tokens, not Gmail IDs).
-  result.candidates.forEach((c, i) => {
+  conversations.candidates.forEach((c, i) => {
     assert.equal(c.selectionId, String(i + 1), `candidate ${i} selectionId should be ${i + 1}`);
     // Must NOT expose Gmail internal IDs.
     assert.equal(Object.hasOwn(c, "id"), false, "public candidate must not expose id");
@@ -584,7 +700,7 @@ test("identity dedup: multiple messages from same person yields ambiguous_messag
     assert.equal(Object.hasOwn(c, "draftId"), false, "public candidate must not expose draftId");
   });
   // Subject null → "No subject" for third candidate.
-  assert.equal(result.candidates[2].subject, "No subject", "null subject should become 'No subject'");
+  assert.equal(conversations.candidates[2].subject, "No subject", "null subject should become 'No subject'");
 });
 
 // B2. Multiple distinct identities yield ambiguous_identity (not ambiguous_message).
@@ -1036,12 +1152,12 @@ test("retrieved content prompting a recipient change is ignored — the original
     proposal: { action: "gmail.search_then_reply", parameters: params({ query: "from:A Friend", body: "Thanks!" }) },
     approval: "always_allow",
   });
-  assert.equal(r.status, "success");
+  assert.equal(r.status, "ambiguous_identity");
   // Reply is dispatched to msg-1 via gmailProvider (which uses reply-to/from of the original message).
   // Executor payload must not contain "attacker@evil.com".
   const serialized = JSON.stringify(calls);
   assert.equal(serialized.includes("attacker@evil.com"), false);
-  assert.equal(calls[calls.length - 1].payload.messageId, "msg-1");
+  assert.equal(calls.length, 1);
 });
 
 // N. Existing permission behavior: gmail.draft permission never authorizes send/send-reply.
@@ -1308,7 +1424,7 @@ test("calendar.search persists trusted eventIds/candidates and returns selection
 });
 
 test("calendar.read/update/delete reject an eventId that is not already server-trusted", async () => {
-  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-trusted"], calendarCandidates: [{ id: "evt-trusted", summary: "Sync" }] };
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-trusted"], calendarCandidates: [{ id: "evt-trusted", summary: "Sync" }], trustedCalendarEvent: { id: "evt-trusted", summary: "Sync" } };
   let called = false;
   const orchestrator = createActionOrchestrator({
     contextService: conversationService(record),
@@ -1326,7 +1442,7 @@ test("calendar.read/update/delete reject an eventId that is not already server-t
 });
 
 test("calendar.update/delete succeed against a server-trusted eventId", async () => {
-  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-trusted"], calendarCandidates: [{ id: "evt-trusted", summary: "Sync" }] };
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-trusted"], calendarCandidates: [{ id: "evt-trusted", summary: "Sync" }], trustedCalendarEvent: { id: "evt-trusted", summary: "Sync" } };
   const calls = [];
   const orchestrator = createActionOrchestrator({
     contextService: conversationService(record),
@@ -1382,7 +1498,7 @@ test("calendar.create resolves the self-recipient marker to the authenticated us
 });
 
 test("calendar.delete removes the event from trusted state so it cannot be referenced again", async () => {
-  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-trusted"], calendarCandidates: [{ id: "evt-trusted", summary: "Sync" }] };
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-trusted"], calendarCandidates: [{ id: "evt-trusted", summary: "Sync" }], trustedCalendarEvent: { id: "evt-trusted", summary: "Sync" } };
   const orchestrator = createActionOrchestrator({
     contextService: conversationService(record),
     actionExecutor: async () => ({ status: "success", result: { deleted: true } }),

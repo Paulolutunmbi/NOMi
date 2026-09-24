@@ -1,6 +1,20 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createConversationContextService } = require("../src/services/conversations/conversationContextService");
+const { createConversationContextService, normalizeTrustedDraft, normalizeTrustedCalendarEvent, normalizeTrustedGmailPerson } = require("../src/services/conversations/conversationContextService");
+
+test("trusted persistent action context keeps recipient/event references but strips attachment bytes", () => {
+  const draft = normalizeTrustedDraft({ action: "gmail.draft", draftId: "d1", recipient: "paul@example.com", body: "hello", attachments: [
+    { id: "att-1", filename: "photo.png", mimeType: "image/png", size: 12, data: Buffer.from("raw") },
+  ] });
+  assert.equal(draft.recipient, "paul@example.com");
+  assert.equal(draft.attachments[0].id, "att-1");
+  assert.equal(Object.hasOwn(draft.attachments[0], "data"), false);
+  const event = normalizeTrustedCalendarEvent({ id: "evt-1", summary: "Design", start: "2026-09-25T15:00:00Z" });
+  assert.equal(event.id, "evt-1");
+  assert.equal(event.summary, "Design");
+  assert.deepEqual(normalizeTrustedGmailPerson({ name: "Paul", email: "PAUL@example.com" }), { email: "paul@example.com", name: "Paul" });
+  assert.equal(normalizeTrustedGmailPerson({ email: "not-an-email" }), null);
+});
 
 test("temporary context expires and cannot be reused", async () => {
   let clock = new Date("2026-01-01T00:00:00Z");

@@ -1,6 +1,7 @@
 const express = require("express");
 const { findOrCreateFromFirebaseClaims } = require("../services/users/userService");
 const { storeAttachment, getAttachment, removeAttachments } = require("../services/attachments/attachmentService");
+const ChatSession = require("../models/ChatSession");
 
 const createAttachmentRouter = ({ authMiddleware, getUser = findOrCreateFromFirebaseClaims } = {}) => {
   const router = express.Router();
@@ -12,7 +13,7 @@ const createAttachmentRouter = ({ authMiddleware, getUser = findOrCreateFromFire
   router.post("/upload", requireAuth, async (req, res, next) => {
     try {
       const user = await getUser(req.user);
-      const { filename, mimeType, data } = req.body || {};
+      const { filename, mimeType, data, chatId = null } = req.body || {};
 
       if (!data) {
         return res.status(400).json({
@@ -21,7 +22,10 @@ const createAttachmentRouter = ({ authMiddleware, getUser = findOrCreateFromFire
         });
       }
 
-      const attachment = await storeAttachment({ user, filename, mimeType, data });
+      if (chatId && !await ChatSession.exists({ _id: chatId, user: user._id })) {
+        return res.status(404).json({ success: false, error: { code: "CHAT_NOT_FOUND", message: "This chat could not be found." } });
+      }
+      const attachment = await storeAttachment({ user, chatId, filename, mimeType, data });
       return res.status(201).json({
         success: true,
         attachment,
@@ -40,7 +44,7 @@ const createAttachmentRouter = ({ authMiddleware, getUser = findOrCreateFromFire
   router.get("/:id", requireAuth, async (req, res, next) => {
     try {
       const user = await getUser(req.user);
-      const attachment = await getAttachment({ user, attachmentId: req.params.id });
+      const attachment = await getAttachment({ user, attachmentId: req.params.id, includeBuffer: false });
       if (!attachment) {
         return res.status(404).json({
           success: false,
