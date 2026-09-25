@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { executeAiAction, fetchChatMessages, getOrCreateChat, saveChatMessage } from '../api/nomiClient'
+import { executeAiAction, fetchChatMessages, fetchChat, saveChatMessage } from '../api/nomiClient'
 import { errorKindFor } from '../utils/errorKind'
 
 let turnCounter = 0
@@ -54,7 +54,7 @@ function turnFromError(error) {
  * own conversationId so they don't bleed into each other's context) through
  * the single /api/ai/execute contract.
  */
-export function useNomiConversation(workspaceType) {
+export function useNomiConversation(workspaceType, selectedChatId) {
   const [turns, setTurns] = useState([])
   const [chatId, setChatId] = useState(null)
   const [isProcessing, setIsProcessing] = useState(false)
@@ -67,8 +67,10 @@ export function useNomiConversation(workspaceType) {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
+      if (!selectedChatId) return
       try {
-        const { chat } = await getOrCreateChat(workspaceType)
+        const { chat } = await fetchChat(selectedChatId)
+        if (chat.type !== workspaceType) throw new Error('Chat belongs to another workspace')
         const history = await fetchChatMessages(chat.id)
         if (cancelled) return
         setChatId(chat.id)
@@ -80,7 +82,7 @@ export function useNomiConversation(workspaceType) {
       }
     })()
     return () => { cancelled = true; abortRef.current?.abort() }
-  }, [workspaceType])
+  }, [workspaceType, selectedChatId])
 
   const runExecute = useCallback(async ({ message, approval, label, attachmentIds, attachmentsMeta }) => {
     setIsProcessing(true)
@@ -90,7 +92,7 @@ export function useNomiConversation(workspaceType) {
     abortRef.current = controller
 
     try {
-      if (!chatId) throw new Error('Chat is still loading')
+      if (!chatId || chatId !== selectedChatId) throw new Error('Chat is still loading')
       const data = await executeAiAction({ conversationId: chatId, message, approval, attachmentIds, signal: controller.signal })
       const turn = { id: nextId(), role: 'nomi', ...turnFromOutcome(data.outcome, attachmentsMeta) }
       setTurns((prev) => [...prev, turn])
@@ -104,7 +106,7 @@ export function useNomiConversation(workspaceType) {
     } finally {
       setIsProcessing(false)
     }
-  }, [chatId])
+  }, [chatId, selectedChatId])
 
   const send = useCallback((message, attachmentIds = [], attachmentsMeta = []) => {
     const trimmed = message.trim()

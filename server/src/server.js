@@ -14,6 +14,7 @@ const { createAuthRouter } = require("./routes/authRoutes");
 const { createAttachmentRouter } = require("./routes/attachmentRoutes");
 const { createChatRouter } = require("./routes/chatRoutes");
 const { cleanupExpiredAttachments } = require("./services/attachments/attachmentService");
+const ChatSession = require("./models/ChatSession");
 
 const app = express();
 
@@ -52,6 +53,12 @@ const PORT = process.env.PORT || 5000;
 const startServer = async () => {
   try {
     await connectDatabase();
+    // Older NOMI versions allowed only one chat per workspace. Remove that
+    // exact obsolete unique index so multiple persistent sessions can be created.
+    const indexes = await ChatSession.collection.indexes();
+    const obsolete = indexes.find((index) => index.unique && index.key?.user === 1 && index.key?.type === 1 && Object.keys(index.key).length === 2);
+    if (obsolete) await ChatSession.collection.dropIndex(obsolete.name);
+    await ChatSession.collection.createIndex({ user: 1, type: 1, lastMessageAt: -1 });
     const attachmentCleanup = setInterval(() => cleanupExpiredAttachments().catch(() => {}), 10 * 60 * 1000);
     attachmentCleanup.unref();
 

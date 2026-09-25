@@ -15,13 +15,9 @@ test("persistent Gmail and Calendar chats reload for their owner and remain acco
   const chats = [];
   const messages = [];
   const ChatSession = {
-    find: (filter) => makeQuery(chats.filter((item) => String(item.user) === String(filter.user))),
+    find: (filter) => makeQuery(chats.filter((item) => String(item.user) === String(filter.user) && (!filter.type || item.type === filter.type))),
     findOne: async (filter) => chats.find((item) => String(item._id) === String(filter._id) && String(item.user) === String(filter.user)) || null,
-    findOneAndUpdate: async (filter, update) => {
-      let item = chats.find((chat) => String(chat.user) === String(filter.user) && chat.type === filter.type);
-      if (!item) { item = { _id: new mongoose.Types.ObjectId(), user: filter.user, type: filter.type, title: null, summary: "", lastMessageAt: new Date(), metadata: {} }; chats.push(item); }
-      return item;
-    },
+    create: async (data) => { const item = { _id: new mongoose.Types.ObjectId(), ...data, title: null, summary: "", lastMessageAt: new Date(), metadata: {} }; chats.push(item); return item; },
     updateOne: async (filter, update) => { const item = chats.find((chat) => String(chat._id) === String(filter._id) && String(chat.user) === String(filter.user)); if (item) Object.assign(item, update.$set); },
   };
   const ChatMessage = {
@@ -38,8 +34,16 @@ test("persistent Gmail and Calendar chats reload for their owner and remain acco
   const create = async (type, owner = "user-a") => fetch(base, { method: "POST", headers: { "content-type": "application/json", "x-user": owner }, body: JSON.stringify({ type }) }).then((r) => r.json());
   const gmail = (await create("gmail")).chat;
   const calendar = (await create("calendar")).chat;
-  assert.equal((await create("gmail")).chat.id, gmail.id);
+  const secondGmail = (await create("gmail")).chat;
+  assert.notEqual(secondGmail.id, gmail.id);
   assert.notEqual(calendar.id, gmail.id);
+  const gmailList = await fetch(`${base}?type=gmail`).then((r) => r.json());
+  const calendarList = await fetch(`${base}?type=calendar`).then((r) => r.json());
+  assert.deepEqual(gmailList.chats.map((chat) => chat.id), [gmail.id, secondGmail.id]);
+  assert.deepEqual(calendarList.chats.map((chat) => chat.id), [calendar.id]);
+  const loaded = await fetch(`${base}/${gmail.id}`).then((r) => r.json());
+  assert.equal(loaded.chat.id, gmail.id);
+  assert.equal(loaded.chat.type, "gmail");
   for (let index = 0; index < 24; index += 1) {
     const response = await fetch(`${base}/${gmail.id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ role: "user", content: `Find Paul ${index} ${"x".repeat(300)}` }) });
     assert.equal(response.status, 201);

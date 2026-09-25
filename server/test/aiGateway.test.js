@@ -18,3 +18,30 @@ test("gateway normalizes provider failures", async () => {
   const result = await gateway.generateIntent({ safeInput: { userRequest: "Search mail", untrustedRetrievedContent: [] } });
   assert.deepEqual(result, { status: "provider_error", provider: "groq", reason: "ai_provider_timeout" });
 });
+
+test("person search phrases are deterministic Gmail search intents without calling the planner", async () => {
+  const phrases = [
+    ["search paul", "paul"],
+    ["search for paul", "paul"],
+    ["find paul", "paul"],
+    ["find my contact paul", "paul"],
+    ["search for the user paul", "paul"],
+    ["search paul he is a contact", "paul"],
+    ["Search Gmail for Paul", "paul"],
+  ];
+  const gateway = createAIGateway({ providerName: "groq", adapters: { groq: { generateIntent: async () => { throw new Error("planner should not run"); } } } });
+  for (const [message, name] of phrases) {
+    const result = await gateway.generateIntent({ safeInput: { userRequest: message, untrustedRetrievedContent: [] } });
+    assert.equal(result.status, "proposed", message);
+    assert.equal(result.intent.action, "gmail.search", message);
+    assert.equal(result.intent.parameters.query, `{from:${name} to:${name}}`, message);
+  }
+});
+
+test("person search does not reclassify arbitrary email queries as contact searches", async () => {
+  let called = false;
+  const gateway = createAIGateway({ providerName: "groq", adapters: { groq: { generateIntent: async () => { called = true; return { action: "gmail.search", parameters: fullParams({ query: "is:unread" }) }; } } } });
+  const result = await gateway.generateIntent({ safeInput: { userRequest: "find my unread emails from last week", untrustedRetrievedContent: [] } });
+  assert.equal(called, true);
+  assert.equal(result.status, "proposed");
+});

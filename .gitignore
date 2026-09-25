@@ -81,3 +81,5 @@ server/credentials/
 
 # dataconnect generated files
 .dataconnect
+
+.agents.zip

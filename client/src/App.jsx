@@ -1,8 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import AppShell from './components/AppShell'
 import { RequireAuth, RequireGuest } from './components/RouteGuards'
-import { AuthProvider, useAuth } from './context/AuthContext'
-import { ThemeProvider } from './context/ThemeContext'
+import { useAuth } from './context/AuthContext'
 import RootRoute from './pages/RootRoute'
 import SignIn from './pages/SignIn'
 import SignUp from './pages/SignUp'
@@ -20,8 +19,11 @@ function AuthenticatedApp() {
     <AppShell userLabel={user?.email} onSignOut={signOut}>
       <Routes>
         <Route index element={<Home />} />
+        <Route path="home/chat/:chatId" element={<Home />} />
         <Route path="gmail" element={<Gmail />} />
+        <Route path="gmail/chat/:chatId" element={<Gmail />} />
         <Route path="calendar" element={<CalendarPage />} />
+        <Route path="calendar/chat/:chatId" element={<CalendarPage />} />
         <Route path="settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/app" replace />} />
       </Routes>
@@ -52,13 +54,9 @@ function AppRoutes() {
 
 function App() {
   return (
-    <ThemeProvider>
-      <AuthProvider>
-        <BrowserRouter>
-          <AppRoutes />
-        </BrowserRouter>
-      </AuthProvider>
-    </ThemeProvider>
+    <BrowserRouter>
+      <AppRoutes />
+    </BrowserRouter>
   )
 }
 

@@ -194,14 +194,21 @@ const replyIdentityQuery = (message) => {
   return namedMatch ? namedMatch[1].trim() : null;
 };
 const personSearchQuery = (message, query) => {
-  let raw = typeof query === "string" ? query.trim() : "";
+  const source = String(message || "").trim();
+  const hasSearchVerb = /^(?:please\s+)?(?:search|find|locate|look\s+for|look\s+up)\b/i.test(source);
+  if (!hasSearchVerb) return null;
+  const utterance = hasSearchVerb ? source
+    .replace(/^(?:please\s+)?(?:search|find|locate|look\s+for|look\s+up)\s+(?:in\s+)?(?:gmail\s+)?(?:for\s+)?/i, "")
+    .replace(/^(?:(?:my|the)\s+)?(?:contact|person|user|someone)\s+/i, "")
+    .replace(/[’']s\s+(?:email|emails|message|messages|thread)\.?$/i, "")
+    .replace(/\s+(?:he|she|they)\s+(?:is|are)\s+(?:a\s+)?(?:contact|person)\b.*$/i, "")
+    .trim() : "";
+  let raw = utterance || (typeof query === "string" ? query.trim() : "");
   raw = raw.replace(/^(?:from|to):\s*/i, "").trim();
-  const utteranceMatch = String(message || "").match(/\b(?:person|contact|someone|for|from|to)\s+([A-Z][\p{L}'-]+(?:\s+[A-Z][\p{L}'-]+){0,2})/iu);
-  if (utteranceMatch) raw = utteranceMatch[1].trim();
-  if (!raw || raw.length > 80 || /[{}():]/.test(raw) || /\b(?:after|before|newer_than|older_than|is|has)\s*:/i.test(raw)) return null;
-  const hasExplicitPersonLabel = /\b(?:person|contact|someone|who)\b/i.test(String(message || ""));
-  const looksLikeName = /^(?:[A-Z][\p{L}'-]+)(?:\s+[A-Z][\p{L}'-]+){0,2}$/iu.test(raw);
-  return hasExplicitPersonLabel || looksLikeName ? raw : null;
+  if (!raw || raw.length > 80 || /[@{}():]/.test(raw) || /\b(?:after|before|newer_than|older_than)\s*:/i.test(raw)) return null;
+  if (/\b(?:inbox|emails?|messages?|thread|calendar|unread|read|last|recent|after|before|from|to)\b/i.test(raw)) return null;
+  if (!/^[\p{L}][\p{L}'-]+(?:\s+[\p{L}][\p{L}'-]*){0,2}$/iu.test(raw)) return null;
+  return raw;
 };
 const payloadFor = (intent) => {
   const { action, parameters } = intent;

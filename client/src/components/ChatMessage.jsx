@@ -64,7 +64,7 @@ export default function ChatMessage({ turn, isLatest, onSelectCandidate, onDecid
           </div>
         )}
         {turn.kind === 'calendar_candidates' && (
-          <CalendarCandidates candidates={turn.candidates} disabled />
+          <CalendarCandidates candidates={turn.candidates} onSelect={onSelectCandidate} disabled={!interactive} />
         )}
         {turn.kind === 'approval_required' && (
           <ApprovalCard action={turn.action} onDecide={onDecideApproval} disabled={!interactive} />

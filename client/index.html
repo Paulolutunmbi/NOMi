@@ -12,9 +12,11 @@
       (function () {
         try {
           var stored = window.localStorage.getItem('nomi.theme');
-          var resolved = stored === 'light' || stored === 'dark'
-            ? stored
-            : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          var resolved = stored === 'dark'
+            ? 'dark'
+            : stored === 'system'
+              ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+              : 'light';
           document.documentElement.dataset.theme = resolved;
         } catch (e) {
           document.documentElement.dataset.theme = 'light';

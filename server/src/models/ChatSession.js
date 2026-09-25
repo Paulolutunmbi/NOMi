@@ -10,5 +10,5 @@ const chatSessionSchema = new mongoose.Schema({
   metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
 }, { timestamps: true });
 
-chatSessionSchema.index({ user: 1, type: 1 }, { unique: true });
+chatSessionSchema.index({ user: 1, type: 1, lastMessageAt: -1 });
 module.exports = mongoose.model("ChatSession", chatSessionSchema);

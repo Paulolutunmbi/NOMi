@@ -90,6 +90,18 @@ export function getOrCreateChat(type) {
   return request('/api/chats', { method: 'POST', body: { type } })
 }
 
+export function createChat(type) {
+  return request('/api/chats', { method: 'POST', body: { type } })
+}
+
+export function listChats(type) {
+  return request(`/api/chats?type=${encodeURIComponent(type)}`)
+}
+
+export function fetchChat(chatId) {
+  return request(`/api/chats/${encodeURIComponent(chatId)}`)
+}
+
 export function fetchChatMessages(chatId) {
   return request(`/api/chats/${encodeURIComponent(chatId)}/messages`)
 }

@@ -13,7 +13,9 @@ const createChatRouter = ({ authMiddleware, getUser = findOrCreateFromFirebaseCl
   router.get("/", async (req, res, next) => {
     try {
       const user = await getUser(req.user);
-      const chats = await chatSessionModel.find({ user: user._id }).sort({ lastMessageAt: -1 }).lean();
+      const filter = { user: user._id };
+      if (["gmail", "calendar", "home"].includes(req.query.type)) filter.type = req.query.type;
+      const chats = await chatSessionModel.find(filter).sort({ lastMessageAt: -1 }).lean();
       res.json({ success: true, chats: chats.map(({ _id, type, title, summary, lastMessageAt }) => ({ id: String(_id), type, title, summary, lastMessageAt })) });
     } catch (error) { next(error); }
   });
@@ -23,8 +25,17 @@ const createChatRouter = ({ authMiddleware, getUser = findOrCreateFromFirebaseCl
       const user = await getUser(req.user);
       const type = req.body?.type;
       if (!["gmail", "calendar", "home"].includes(type)) return res.status(400).json({ success: false, error: { code: "CHAT_TYPE_INVALID", message: "Choose a valid workspace." } });
-      const chat = await chatSessionModel.findOneAndUpdate({ user: user._id, type }, { $setOnInsert: { user: user._id, type } }, { new: true, upsert: true, setDefaultsOnInsert: true });
-      res.status(200).json({ success: true, chat: { id: String(chat._id), type: chat.type, title: chat.title, summary: chat.summary, lastMessageAt: chat.lastMessageAt } });
+      const chat = await chatSessionModel.create({ user: user._id, type });
+      res.status(201).json({ success: true, chat: { id: String(chat._id), type: chat.type, title: chat.title, summary: chat.summary, lastMessageAt: chat.lastMessageAt } });
+    } catch (error) { next(error); }
+  });
+
+  router.get("/:chatId", async (req, res, next) => {
+    try {
+      const user = await getUser(req.user);
+      const chat = await ownerChat(req.params.chatId, user._id);
+      if (!chat) return res.status(404).json({ success: false, error: { code: "CHAT_NOT_FOUND", message: "Chat not found." } });
+      res.json({ success: true, chat: { id: String(chat._id), type: chat.type, title: chat.title, summary: chat.summary, lastMessageAt: chat.lastMessageAt } });
     } catch (error) { next(error); }
   });
 

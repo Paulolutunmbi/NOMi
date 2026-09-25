@@ -4,7 +4,6 @@ export default function Home() {
   return (
     <Workspace
       workspaceType="home"
-      conversationId="home-workspace"
       placeholder="Ask NOMI to find an email, draft a reply, or manage your calendar…"
       emptyTitle="Your NOMI workspace is ready"
       emptyBody="Ask about your email or your calendar in plain language — NOMI will handle the rest, with your approval at each step."

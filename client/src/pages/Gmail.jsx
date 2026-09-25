@@ -4,7 +4,6 @@ export default function Gmail() {
   return (
     <Workspace
       workspaceType="gmail"
-      conversationId="gmail"
       placeholder="Search Gmail, draft a reply, or send a message…"
       emptyTitle="No conversations yet"
       emptyBody="Try asking NOMI to find a message or draft a reply to someone."

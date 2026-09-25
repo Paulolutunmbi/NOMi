@@ -9,9 +9,9 @@ const systemPrefersDark = () =>
 const readStoredTheme = () => {
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY)
-    return VALID_THEMES.includes(stored) ? stored : 'system'
+    return VALID_THEMES.includes(stored) ? stored : 'light'
   } catch {
-    return 'system'
+    return 'light'
   }
 }
 
