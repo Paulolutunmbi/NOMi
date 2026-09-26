@@ -6,6 +6,7 @@ const { createPermissionRouter } = require("../src/routes/permissionRoutes");
 
 const makeExecutor = (permissions = new Map()) => {
   const executions = [];
+  const pendingSendModel = { create: async (record) => ({ ...record, _id: "000000000000000000000001" }) };
   const executor = createActionExecutor({
     check: async ({ userId, provider, action }) => {
       const decision = permissions.get(`${userId}:${provider}:${action}`) || null;
@@ -14,6 +15,7 @@ const makeExecutor = (permissions = new Map()) => {
     save: async ({ userId, provider, action, decision }) => permissions.set(`${userId}:${provider}:${action}`, decision),
     getProvider: () => ({ capabilities: ["gmail.draft", "gmail.send", "gmail.draft.reply", "calendar.create", "calendar.delete"], execute: async (input) => { executions.push(input); return { id: "safe" }; } }),
     audit: async () => {},
+    pendingSendModel,
   });
   return { executor, permissions, executions };
 };
@@ -46,9 +48,10 @@ test("deny never calls the provider", async () => {
 test("gmail draft grants never authorize send or draft reply", async () => {
   const { executor } = makeExecutor();
   await executor({ user: { _id: "u1" }, provider: "google", action: "gmail.draft", approval: "always_allow" });
-  const send = await executor({ user: { _id: "u1" }, provider: "google", action: "gmail.send" });
+  const send = await executor({ user: { _id: "u1" }, provider: "google", action: "gmail.send", payload: { recipient: "person@example.com", subject: "Hello", body: "Hi" } });
   const reply = await executor({ user: { _id: "u1" }, provider: "google", action: "gmail.draft.reply" });
   assert.equal(send.status, "approval_required");
+  assert.ok(send.pendingAction?.id);
   assert.equal(reply.status, "approval_required");
 });
 

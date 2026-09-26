@@ -8,8 +8,6 @@ import SignUp from './pages/SignUp'
 import ForgotPassword from './pages/ForgotPassword'
 import Onboarding from './pages/Onboarding'
 import Home from './pages/Home'
-import Gmail from './pages/Gmail'
-import CalendarPage from './pages/Calendar'
 import Settings from './pages/Settings'
 
 function AuthenticatedApp() {
@@ -19,12 +17,11 @@ function AuthenticatedApp() {
     <AppShell userLabel={user?.email} onSignOut={signOut}>
       <Routes>
         <Route index element={<Home />} />
-        <Route path="home/chat/:chatId" element={<Home />} />
-        <Route path="gmail" element={<Gmail />} />
-        <Route path="gmail/chat/:chatId" element={<Gmail />} />
-        <Route path="calendar" element={<CalendarPage />} />
-        <Route path="calendar/chat/:chatId" element={<CalendarPage />} />
+        <Route path="chat/:chatId" element={<Home />} />
         <Route path="settings" element={<Settings />} />
+        {/* Gmail and Calendar used to be separate tabs with their own chat
+            threads — mail and calendar are both available from any chat now,
+            so old bookmarked links just land on the unified chat list. */}
         <Route path="*" element={<Navigate to="/app" replace />} />
       </Routes>
     </AppShell>

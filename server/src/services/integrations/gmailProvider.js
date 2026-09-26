@@ -1,6 +1,7 @@
 const SUPPORTED_ACTIONS = new Set([
-  "gmail.search", "gmail.read", "gmail.draft", "gmail.send", "gmail.draft.reply", "gmail.send.reply", "gmail.draft.update",
+  "gmail.search", "gmail.read", "gmail.draft", "gmail.send", "gmail.draft.reply", "gmail.send.reply", "gmail.draft.update", "gmail.markRead",
 ]);
+const MAX_MARK_READ_IDS = 50;
 
 const MAX_RESULTS = 50;
 const MAX_QUERY_LENGTH = 500;
@@ -134,8 +135,8 @@ const senderFromHeader = (value) => {
   const name = text(raw.replace(/<[^>]*>/g, "").replace(/^\s*['\"]|['\"]\s*$/g, "")) || null;
   return { name: name === email ? null : name, email };
 };
-const normalizeSearchMessage = (message) => {
-  const normalized = normalizeMessage(message);
+const normalizeSearchMessage = (message, includeBody = false) => {
+  const normalized = normalizeMessage(message, includeBody);
   const rawFrom = header(message, "From") || normalized.sender;
   return { ...normalized, from: senderFromHeader(rawFrom) };
 };
@@ -164,7 +165,7 @@ const createGmailProvider = ({ gmailFactory } = {}) => {
         const id = messageId(payload.messageId);
         if (!id) throw safeError("gmail_invalid_request", "A Gmail message ID is required");
         const message = await getMessage(gmail, id, "full");
-        return { message: normalizeMessage(message, true), auditMetadata: { messageId: message.id } };
+        return { message: normalizeSearchMessage(message, true), auditMetadata: { messageId: message.id } };
       }
       if (action === "gmail.draft" || action === "gmail.send") {
         const raw = makeMime(payload);
@@ -175,6 +176,12 @@ const createGmailProvider = ({ gmailFactory } = {}) => {
         const data = response.data || {};
         const result = action === "gmail.draft" ? { draftId: text(data.id, 200), messageId: text(data.message?.id, 200), threadId: text(data.message?.threadId, 200) } : { messageId: text(data.id, 200), threadId: text(data.threadId, 200) };
         return { ...result, auditMetadata: { operation: action === "gmail.draft" ? "draft_created" : "message_sent" } };
+      }
+      if (action === "gmail.markRead") {
+        const ids = [...new Set((Array.isArray(payload.messageIds) ? payload.messageIds : []).map((value) => messageId(value)).filter(Boolean))].slice(0, MAX_MARK_READ_IDS);
+        if (!ids.length) throw safeError("gmail_invalid_request", "At least one Gmail message ID is required");
+        await gmail.users.messages.batchModify({ userId: "me", requestBody: { ids, removeLabelIds: ["UNREAD"] } });
+        return { markedRead: ids.length, auditMetadata: { operation: "messages_marked_read", count: ids.length } };
       }
       if (action === "gmail.draft.update") {
         const draftId = messageId(payload.draftId);

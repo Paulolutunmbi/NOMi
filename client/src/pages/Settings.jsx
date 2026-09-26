@@ -170,13 +170,13 @@ export default function Settings() {
 
           {!googleStatusLoading && googleStatus?.connected && (
             <div className="rounded-xl border border-line bg-surface-muted p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-start gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex min-w-0 items-start gap-3">
                   <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-nomi-orange-light text-sm font-semibold text-nomi-orange-dark">
                     {initials(account?.displayName || account?.email)}
                   </span>
-                  <div>
-                    <p className="text-sm font-medium text-ink">{account?.email}</p>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-ink" title={account?.email}>{account?.email}</p>
                     <span className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-success">
                       <span className="h-1.5 w-1.5 rounded-full bg-success" aria-hidden="true" />
                       Connected
@@ -187,7 +187,7 @@ export default function Settings() {
                   type="button"
                   disabled={busy}
                   onClick={handleDisconnect}
-                  className="shrink-0 rounded-lg border border-line-strong px-3 py-1.5 text-xs font-medium text-ink-soft transition-colors hover:border-danger hover:text-danger disabled:opacity-60"
+                  className="w-full shrink-0 rounded-lg border border-line-strong px-3 py-1.5 text-xs font-medium text-ink-soft transition-colors hover:border-danger hover:text-danger disabled:opacity-60 sm:w-auto"
                 >
                   Disconnect
                 </button>

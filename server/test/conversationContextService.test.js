@@ -12,7 +12,7 @@ test("trusted persistent action context keeps recipient/event references but str
   const event = normalizeTrustedCalendarEvent({ id: "evt-1", summary: "Design", start: "2026-09-25T15:00:00Z" });
   assert.equal(event.id, "evt-1");
   assert.equal(event.summary, "Design");
-  assert.deepEqual(normalizeTrustedGmailPerson({ name: "Paul", email: "PAUL@example.com" }), { email: "paul@example.com", name: "Paul" });
+  assert.deepEqual(normalizeTrustedGmailPerson({ name: "Paul", email: "PAUL@example.com" }), { email: "paul@example.com", name: "Paul", source: "selected_person" });
   assert.equal(normalizeTrustedGmailPerson({ email: "not-an-email" }), null);
 });
 

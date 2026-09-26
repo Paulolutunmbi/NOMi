@@ -156,9 +156,10 @@ const createCalendarProvider = ({ calendarFactory } = {}) => {
           requestBody.end = { dateTime: end, ...(payload.timeZone ? { timeZone: text(payload.timeZone, 100) } : {}) };
         }
         if (payload.attendees !== undefined && payload.attendees !== null) requestBody.attendees = parseAttendees(payload.attendees);
+        if (payload.addMeet) requestBody.conferenceData = { createRequest: { requestId: `nomi-${Date.now()}` } };
         if (!Object.keys(requestBody).length) throw safeError("calendar_invalid_request", "At least one field to update is required");
         const response = await calendar.events.patch({
-          calendarId: "primary", eventId: id, requestBody, sendUpdates: requestBody.attendees?.length ? "all" : "none",
+          calendarId: "primary", eventId: id, requestBody, conferenceDataVersion: payload.addMeet ? 1 : 0, sendUpdates: requestBody.attendees?.length ? "all" : "none",
         }).catch((error) => { throw normalizeGoogleError(error, { eventNotFound: true }); });
         return { event: normalizeEvent(response.data), auditMetadata: { operation: "calendar_event_updated" } };
       }

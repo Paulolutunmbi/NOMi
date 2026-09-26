@@ -143,6 +143,7 @@ function AiIntentTestPage() {
             success: false,
             executionType: 'approval_required',
             action: outcome.action,
+            pendingAction: outcome.pendingAction || null,
             approvalMessage: `NOMI is asking to ${humanizeAction(outcome.action)}. This approval applies only to ${outcome.action}.`,
             rawResponse: safeData,
           })
@@ -263,6 +264,22 @@ function AiIntentTestPage() {
     }
   }
 
+  const decidePendingSend = async (decision) => {
+    if (!result?.pendingAction?.id || isSubmitting) return
+    setIsSubmitting(true)
+    try {
+      const token = await getCurrentIdToken()
+      const response = await fetch(`${API_BASE_URL}/api/ai/send-approval`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: result.pendingAction.id, conversationId, decision }),
+      })
+      const data = await response.json().catch(() => ({}))
+      setResult({ status: response.status, success: Boolean(data.success), executionType: data.outcome?.status || 'error', action: result.action, result: data.outcome?.result, rawResponse: sanitizeValue(data) })
+    } catch {
+      setResult({ status: 500, success: false, executionType: 'error', error: { message: 'Unable to submit this send decision.' } })
+    } finally { setIsSubmitting(false) }
+  }
+
   const handleSubmit = (event) => {
     event.preventDefault()
     executeAiAction()
@@ -349,17 +366,15 @@ function AiIntentTestPage() {
                 <button
                   type="button"
                   disabled={isSubmitting}
-                  onClick={() => executeAiAction('allow_once')}
+                  onClick={() => result.pendingAction ? decidePendingSend('allow') : executeAiAction('allow_once')}
                 >
-                  {isSubmitting ? 'Submitting…' : 'Allow once'}
+                  {isSubmitting ? 'Submitting…' : 'Allow'}
                 </button>
-                <button type="button" disabled={isSubmitting} onClick={() => executeAiAction('always_allow')}>
-                  Always allow
-                </button>
+                {!result.pendingAction && <button type="button" disabled={isSubmitting} onClick={() => executeAiAction('always_allow')}>Always allow</button>}
                 <button
                   type="button"
                   disabled={isSubmitting}
-                  onClick={() => executeAiAction('deny')}
+                  onClick={() => result.pendingAction ? decidePendingSend('deny') : executeAiAction('deny')}
                 >
                   {isSubmitting ? 'Submitting…' : 'Deny'}
                 </button>

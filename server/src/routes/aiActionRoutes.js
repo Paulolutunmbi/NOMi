@@ -5,9 +5,12 @@ const { createActionOrchestrator, SEND_FOLLOWUP } = require("../services/actions
 const { prepareAIInput, restorePlaceholders } = require("../services/privacy/privacyService");
 const { createAIGateway } = require("../services/ai/aiGateway");
 const { createGroqProvider } = require("../services/ai/groqProvider");
+const { approvePendingSend, editPendingSend } = require("../services/actions/actionExecutor");
+const { getIntegration } = require("../services/integrations/integrationRegistry");
 const { getAIConfig } = require("../config/ai");
 const mongoose = require("mongoose");
 const ChatSession = require("../models/ChatSession");
+const { extractExplicitRecipientEmail } = require("../services/ai/intentSafetyPolicy");
 
 const validConversationId = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const fail = (res, status, code, message) => res.status(status).json({ success: false, error: { code, message } });
@@ -20,8 +23,7 @@ const looksLikeAmbiguityResolution = (message) => {
   return trimmed.length <= 120;
 };
 const explicitRecipient = (message) => {
-  const match = String(message || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  return match ? match[0].toLowerCase() : null;
+  return extractExplicitRecipientEmail(message);
 };
 const explicitBody = (message) => {
   const cleaned = String(message || "").replace(/\[[^\]]+\]\(mailto:[^)]+\)/ig, " ").replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig, " ");
@@ -101,9 +103,14 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
       }
 
       const safe = prepareAIInput({ userRequest: message, untrustedRetrievedContent: (conversation.retrievedContext || []).slice(0, 5) });
+      const userRecipient = explicitRecipient(message);
+      if (userRecipient && /\b(?:send|draft|write|compose|mail|email)\b/i.test(message)) {
+        conversation.trustedGmailPerson = { email: userRecipient, name: null, source: "explicit_user_email" };
+        await contextService.update({ userId: user._id, conversationId, trustedGmailPerson: conversation.trustedGmailPerson });
+      }
       await contextService.update({ userId: user._id, conversationId, placeholderMappings: safe.mappings });
       const selectedGateway = gateway || createAIGateway({ providerName: config.provider, adapters: config.provider === "groq" ? { groq: createGroqProvider({ config }) } : {} });
-      const planned = await selectedGateway.generateIntent({ safeInput: safe.payload, placeholderMappings: safe.mappings,
+      const planned = await selectedGateway.generateIntent({ safeInput: safe.payload, placeholderMappings: safe.mappings, originalUserRequest: message, explicitRecipientEmail: userRecipient,
         trustedConversationContext: { gmailMessageIds: conversation.gmailMessageIds || [], trustedGmailPerson: conversation.trustedGmailPerson || null, calendarEventIds: conversation.calendarEventIds || [], trustedCalendarEvent: conversation.trustedCalendarEvent || null, chatHistory: conversation.messages || [],
           rollingSummary: persistentChat?.summary || null,
           currentDraftBody: conversation.trustedDraft?.body || null } });
@@ -111,10 +118,20 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
       const intent = restorePlaceholders(planned.intent, safe.mappings);
       // Keep an explicitly typed recipient deterministic. The planner can
       // choose the action/body, but cannot lose an address the user supplied.
-      const recipient = explicitRecipient(message);
+      const recipient = userRecipient;
       if (recipient && ["gmail.draft", "gmail.send"].includes(intent.action)) intent.parameters.recipient = recipient;
       else if (conversation.trustedGmailPerson?.email && ["gmail.draft", "gmail.send"].includes(intent.action)) intent.parameters.recipient = conversation.trustedGmailPerson.email;
       const knownRecipient = recipient || conversation.trustedGmailPerson?.email;
+      if (recipient && intent.action === "gmail.search" && /\b(?:send|email|mail|draft|compose|write)\b/i.test(message)) {
+        const body = explicitBody(message);
+        if (body) {
+          intent.action = /\bsend\b/i.test(message) ? "gmail.send" : "gmail.draft";
+          intent.parameters = { ...intent.parameters, recipient, body, subject: intent.parameters.subject || null };
+        } else {
+          intent.action = "clarification";
+          intent.parameters = { ...intent.parameters, body: "What would you like the email to say?" };
+        }
+      }
       if (knownRecipient && intent.action === "clarification" && /\b(?:tell|draft|write|compose|send)\b/i.test(message)) {
         const body = explicitBody(message);
         if (body) {
@@ -124,6 +141,37 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
       }
       const outcome = await actionOrchestrator.execute({ user, conversationId, message, conversation, proposal: intent, approval, attachmentIds });
       return recordOutcome(outcome);
+    } catch (error) { return next(error); }
+  });
+  router.post("/send-approval", requireAuth, async (req, res, next) => {
+    const { actionId, conversationId, decision } = req.body || {};
+    if (Object.keys(req.body || {}).some((key) => !["actionId", "conversationId", "decision"].includes(key))
+      || typeof actionId !== "string" || !validConversationId(conversationId) || !["allow", "deny"].includes(decision)) {
+      return fail(res, 400, "SEND_APPROVAL_INVALID", "A pending action, conversation, and Allow or Deny decision are required.");
+    }
+    try {
+      const user = await getUser(req.user);
+      const outcome = await approvePendingSend({ userId: user._id, conversationId, actionId, decision, getProvider: getIntegration });
+      const status = outcome.status === "success" || outcome.status === "denied" ? 200
+        : outcome.status === "not_found" ? 404 : outcome.status === "invalid" ? 400 : 409;
+      return res.status(status).json({ success: outcome.status === "success" || outcome.status === "denied", outcome: {
+        status: outcome.status,
+        ...(outcome.action ? { action: outcome.action } : {}),
+        ...(outcome.result ? { result: { messageId: outcome.result.messageId || null } } : {}),
+      } });
+    } catch (error) { return next(error); }
+  });
+  router.patch("/send-approval/:actionId", requireAuth, async (req, res, next) => {
+    const { recipient, subject, body, conversationId } = req.body || {};
+    if (Object.keys(req.body || {}).some((key) => !["recipient", "subject", "body", "conversationId"].includes(key))
+      || !validConversationId(conversationId) || typeof recipient !== "string" || typeof subject !== "string" || typeof body !== "string") {
+      return fail(res, 400, "SEND_DRAFT_INVALID", "A valid editable email draft is required.");
+    }
+    try {
+      const user = await getUser(req.user);
+      const outcome = await editPendingSend({ userId: user._id, conversationId, actionId: req.params.actionId, recipient, subject, body });
+      const status = outcome.status === "updated" ? 200 : outcome.status === "invalid" ? 400 : outcome.status === "not_found" ? 404 : 409;
+      return res.status(status).json({ success: outcome.status === "updated", outcome });
     } catch (error) { return next(error); }
   });
   return router;

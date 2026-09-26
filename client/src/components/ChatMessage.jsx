@@ -8,7 +8,7 @@ import {
 import ErrorState from './ErrorState'
 import { formatBytes } from '../utils/attachments'
 
-export default function ChatMessage({ turn, isLatest, onSelectCandidate, onDecideApproval, onRetry, onReconnect, busy }) {
+export default function ChatMessage({ turn, isLatest, onSelectCandidate, onDecideApproval, onEditSendDraft, onRetry, onReconnect, onComposeHint, busy }) {
   if (turn.role === 'user') {
     return (
       <div className="nomi-enter flex flex-col items-end gap-1.5">
@@ -44,6 +44,9 @@ export default function ChatMessage({ turn, isLatest, onSelectCandidate, onDecid
         {turn.kind === 'clarification' && (
           <p className="rounded-2xl rounded-tl-sm border border-line bg-surface px-4 py-2.5 text-[15px] text-ink-soft">{turn.message}</p>
         )}
+        {turn.kind === 'chat' && (
+          <p className="rounded-2xl rounded-tl-sm border border-line bg-surface px-4 py-2.5 text-[15px] text-ink-soft">{turn.message}</p>
+        )}
         {turn.kind === 'not_found' && (
           <p className="rounded-2xl rounded-tl-sm border border-line bg-surface px-4 py-2.5 text-[15px] text-ink-soft">{turn.message}</p>
         )}
@@ -67,9 +70,9 @@ export default function ChatMessage({ turn, isLatest, onSelectCandidate, onDecid
           <CalendarCandidates candidates={turn.candidates} onSelect={onSelectCandidate} disabled={!interactive} />
         )}
         {turn.kind === 'approval_required' && (
-          <ApprovalCard action={turn.action} onDecide={onDecideApproval} disabled={!interactive} />
+          <ApprovalCard action={turn.action} pendingAction={turn.pendingAction} onDecide={onDecideApproval} onEdit={onEditSendDraft} disabled={!interactive} />
         )}
-        {turn.kind === 'success' && <SuccessCard action={turn.action} result={turn.result} attachmentsMeta={turn.attachmentsMeta} selectedIdentity={turn.selectedIdentity} selectedConversation={turn.selectedConversation} onSelectCandidate={onSelectCandidate} />}
+        {turn.kind === 'success' && <SuccessCard action={turn.action} result={turn.result} attachmentsMeta={turn.attachmentsMeta} selectedIdentity={turn.selectedIdentity} selectedConversation={turn.selectedConversation} onSelectCandidate={onSelectCandidate} onComposeHint={onComposeHint} />}
         {turn.kind === 'error' && <ErrorState kind={turn.errorKind} onRetry={onRetry} onReconnect={onReconnect} />}
       </div>
     </div>

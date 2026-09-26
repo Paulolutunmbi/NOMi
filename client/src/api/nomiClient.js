@@ -86,6 +86,14 @@ export function executeAiAction({ conversationId, message, approval, attachmentI
   })
 }
 
+export function decideSendApproval({ actionId, conversationId, decision, signal }) {
+  return request('/api/ai/send-approval', { method: 'POST', body: { actionId, conversationId, decision }, signal })
+}
+
+export function updateSendDraft({ actionId, conversationId, recipient, subject, body, signal }) {
+  return request(`/api/ai/send-approval/${encodeURIComponent(actionId)}`, { method: 'PATCH', body: { conversationId, recipient, subject, body }, signal })
+}
+
 export function getOrCreateChat(type) {
   return request('/api/chats', { method: 'POST', body: { type } })
 }
@@ -96,6 +104,12 @@ export function createChat(type) {
 
 export function listChats(type) {
   return request(`/api/chats?type=${encodeURIComponent(type)}`)
+}
+
+// All of the user's Gmail + Calendar (+ any other) chats, newest activity
+// first — used to aggregate "Recent conversations" on the Home page.
+export function listAllChats() {
+  return request('/api/chats')
 }
 
 export function fetchChat(chatId) {

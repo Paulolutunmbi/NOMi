@@ -49,7 +49,7 @@ const storeGoogleConnection = async ({ user, tokens, profile }) => {
   return ConnectedAccount.findOneAndUpdate(
     { user: user._id, provider: "google", providerAccountId: profile.id },
     { $set: values, $setOnInsert: { user: user._id, provider: "google", providerAccountId: profile.id } },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
+    { returnDocument: "after", upsert: true, setDefaultsOnInsert: true }
   );
 };
 

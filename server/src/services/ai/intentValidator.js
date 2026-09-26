@@ -3,6 +3,11 @@ const ACTIONS = {
   "gmail.search": { required: ["query"], allowed: ["query", "maxResults"] },
   "gmail.draft": { required: ["recipient", "body"], allowed: ["recipient", "subject", "body"] },
   "gmail.send": { required: ["recipient", "body"], allowed: ["recipient", "subject", "body"] },
+  // Marks the currently trusted/shown Gmail messages as read. Takes no
+  // model-supplied parameters — the server acts only on message IDs already
+  // trusted in this conversation (from a prior search/read), never on IDs the
+  // model invents.
+  "gmail.markRead": { required: [], allowed: [] },
   "gmail.draft.reply": { required: ["messageId", "body"], allowed: ["messageId", "body", "subject"] },
   "gmail.send.reply": { required: ["messageId", "body"], allowed: ["messageId", "body", "subject"] },
   // Content-only edit of the currently trusted draft ("make it more casual").
@@ -10,6 +15,10 @@ const ACTIONS = {
   // conversation state; the model may only propose a revised body.
   "gmail.draft.edit": { required: ["body"], allowed: ["body"] },
   "clarification": { required: ["body"], allowed: ["body"] },
+  // Plain conversational reply: greetings, "what can you do", small talk,
+  // or anything else that isn't a Gmail/Calendar request. Never carries a
+  // recipient, messageId, eventId, or any other privileged parameter.
+  "chat.respond": { required: ["body"], allowed: ["body"] },
   // Compound search-then-reply intents. The model supplies query + body only.
   // messageId, recipient, and subject must remain null — the orchestrator
   // resolves the trusted target server-side after executing the search.
@@ -23,7 +32,7 @@ const ACTIONS = {
   "calendar.read": { required: ["eventId"], allowed: ["eventId"] },
   "calendar.freebusy": { required: ["timeMin", "timeMax"], allowed: ["timeMin", "timeMax"] },
   "calendar.create": { required: ["summary", "startDateTime", "endDateTime"], allowed: ["summary", "description", "location", "startDateTime", "endDateTime", "timeZone", "attendees", "addMeet"] },
-  "calendar.update": { required: ["eventId"], allowed: ["eventId", "summary", "description", "location", "startDateTime", "endDateTime", "timeZone", "attendees"] },
+  "calendar.update": { required: ["eventId"], allowed: ["eventId", "summary", "description", "location", "startDateTime", "endDateTime", "timeZone", "attendees", "addMeet"] },
   "calendar.delete": { required: ["eventId"], allowed: ["eventId"] },
 };
 const SCHEMA_PARAMETERS = [
@@ -80,7 +89,7 @@ const generateSubjectFromBody = (body) => {
   return truncated || "Message";
 };
 
-const validateIntent = (intent, { trustedGmailMessageIds = [], trustedCalendarEventIds = [], recipientPlaceholders = [] } = {}) => {
+const validateIntent = (intent, { trustedGmailMessageIds = [], trustedCalendarEventIds = [], recipientPlaceholders = [], explicitRecipientEmails = [] } = {}) => {
   if (!intent || typeof intent !== "object" || Array.isArray(intent)) return { valid: false, reason: "intent_must_be_an_object" };
   if (Object.keys(intent).some((key) => !["action", "parameters"].includes(key))) return { valid: false, reason: "unexpected_intent_field" };
   if (!ACTIONS[intent.action]) return { valid: false, reason: "unsupported_action" };
@@ -105,8 +114,10 @@ const validateIntent = (intent, { trustedGmailMessageIds = [], trustedCalendarEv
       // Accepted without resolving it or exposing the authenticated address.
     } else if (EMAIL_PLACEHOLDER.test(recipient)) {
       if (!recipientPlaceholders.includes(recipient)) return { valid: false, reason: "untrusted_recipient_placeholder" };
+    } else if (EMAIL.test(recipient) && explicitRecipientEmails.length && recipient.toLowerCase() === explicitRecipientEmails[0]) {
+      // The planner may use exactly the address explicitly supplied this turn.
     } else if (EMAIL.test(recipient)) {
-      return { valid: false, reason: "untrusted_recipient_email" };
+      return { valid: false, reason: explicitRecipientEmails.length ? "explicit_recipient_mismatch" : "untrusted_recipient_email" };
     } else {
       return { valid: false, reason: "unresolved_recipient" };
     }
@@ -142,7 +153,7 @@ const validateIntent = (intent, { trustedGmailMessageIds = [], trustedCalendarEv
       return { valid: false, reason: "unresolved_recipient" };
     }
   }
-  if (intent.action === "calendar.create" && intent.parameters.addMeet !== null && typeof intent.parameters.addMeet !== "boolean") {
+  if (["calendar.create", "calendar.update"].includes(intent.action) && intent.parameters.addMeet !== null && typeof intent.parameters.addMeet !== "boolean") {
     return { valid: false, reason: "invalid_add_meet" };
   }
   return { valid: true, intent: { action: intent.action, parameters: { ...intent.parameters } } };

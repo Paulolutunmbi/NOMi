@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { executeAiAction, fetchChatMessages, fetchChat, saveChatMessage } from '../api/nomiClient'
+import { executeAiAction, decideSendApproval, updateSendDraft, fetchChatMessages, fetchChat, saveChatMessage } from '../api/nomiClient'
 import { errorKindFor } from '../utils/errorKind'
 
 let turnCounter = 0
@@ -24,7 +24,7 @@ function turnFromOutcome(outcome, attachmentsMeta) {
       return turn
     }
     case 'approval_required':
-      return { kind: 'approval_required', action: outcome.action, selectedIdentity: outcome.selectedIdentity || null, selectedConversation: outcome.selectedConversation || null }
+      return { kind: 'approval_required', action: outcome.action, pendingAction: outcome.pendingAction || null, selectedIdentity: outcome.selectedIdentity || null, selectedConversation: outcome.selectedConversation || null }
     case 'denied':
       return { kind: 'denied', action: outcome.action }
     case 'ambiguous_identity':
@@ -35,8 +35,16 @@ function turnFromOutcome(outcome, attachmentsMeta) {
       return { kind: 'no_previous_conversation', message: outcome.message, selectedIdentity: outcome.selectedIdentity || null }
     case 'clarification':
       return { kind: 'clarification', message: outcome.message || 'Could you say a bit more about what you\'d like NOMI to do?' }
+    case 'chat':
+      return { kind: 'chat', message: outcome.message || 'Hi! How can I help with your email or calendar today?' }
     case 'not_found':
       return { kind: 'not_found', message: outcome.message || 'No matching results found.' }
+    case 'email_domain_warning': {
+      const message = outcome.reason === 'likely_typo'
+        ? `That email address doesn't look right — "${outcome.domain}" looks like it might be a typo of "${outcome.suggestion}". Did you mean ${outcome.correctedEmail}? Nothing was sent — try again with the corrected address.`
+        : `I couldn't find a mail server for "${outcome.domain}", so that address may not be able to receive mail. Please double-check it and try again.`
+      return { kind: 'clarification', message }
+    }
     case 'invalid':
     case 'rejected':
       return { kind: 'clarification', message: 'NOMI couldn\'t safely carry out that request. Try rephrasing it.' }
@@ -50,11 +58,11 @@ function turnFromError(error) {
 }
 
 /**
- * Drives one scoped conversation (Home / Gmail / Calendar each keep their
- * own conversationId so they don't bleed into each other's context) through
- * the single /api/ai/execute contract.
+ * Drives one conversation through the single /api/ai/execute contract. Mail
+ * and calendar actions are both available from any chat — there's no
+ * per-workspace scoping anymore, just the selected chat's own history.
  */
-export function useNomiConversation(workspaceType, selectedChatId) {
+export function useNomiConversation(selectedChatId) {
   const [turns, setTurns] = useState([])
   const [chatId, setChatId] = useState(null)
   const [isProcessing, setIsProcessing] = useState(false)
@@ -70,7 +78,6 @@ export function useNomiConversation(workspaceType, selectedChatId) {
       if (!selectedChatId) return
       try {
         const { chat } = await fetchChat(selectedChatId)
-        if (chat.type !== workspaceType) throw new Error('Chat belongs to another workspace')
         const history = await fetchChatMessages(chat.id)
         if (cancelled) return
         setChatId(chat.id)
@@ -82,7 +89,7 @@ export function useNomiConversation(workspaceType, selectedChatId) {
       }
     })()
     return () => { cancelled = true; abortRef.current?.abort() }
-  }, [workspaceType, selectedChatId])
+  }, [selectedChatId])
 
   const runExecute = useCallback(async ({ message, approval, label, attachmentIds, attachmentsMeta }) => {
     setIsProcessing(true)
@@ -135,17 +142,34 @@ export function useNomiConversation(workspaceType, selectedChatId) {
   }, [runExecute])
 
   // Responding to an approval_required card.
-  const respondApproval = useCallback((approval) => {
-    const message = lastMessageRef.current || 'continue'
-    const label = approval === 'deny' ? 'Cancelling…' : 'Finishing that up…'
-    return runExecute({
-      message,
-      approval,
-      label,
-      attachmentIds: lastAttachmentIdsRef.current,
-      attachmentsMeta: lastAttachmentsMetaRef.current,
-    })
-  }, [runExecute])
+  const respondApproval = useCallback(async (actionId, decision) => {
+    if (!actionId) {
+      const approval = decision === 'deny' ? 'deny' : decision === 'always_allow' ? 'always_allow' : 'allow_once'
+      return runExecute({ message: lastMessageRef.current || 'continue', approval, label: decision === 'deny' ? 'Cancelling…' : 'Finishing that up…', attachmentIds: lastAttachmentIdsRef.current, attachmentsMeta: lastAttachmentsMetaRef.current })
+    }
+    setIsProcessing(true)
+    setProcessingLabel(decision === 'deny' ? 'Denying send…' : 'Sending approved email…')
+    try {
+      const response = await decideSendApproval({ actionId, conversationId: chatId, decision })
+      const outcome = response.outcome || {}
+      const turn = { id: nextId(), role: 'nomi', ...(outcome.status === 'success'
+        ? { kind: 'success', action: outcome.action || 'gmail.send', result: outcome.result || {} }
+        : { kind: outcome.status === 'denied' ? 'denied' : 'error', message: outcome.status === 'denied' ? 'Send denied.' : 'The send could not be approved.', errorKind: 'generic' }) }
+      setTurns((prev) => [...prev, turn])
+      await saveChatMessage(chatId, { role: 'assistant', content: turn.message || (turn.kind === 'success' ? 'Email sent.' : 'Send denied.'), metadata: { kind: turn.kind, action: turn.action, result: turn.result } }).catch(() => {})
+      return turn
+    } catch (error) {
+      const turn = { id: nextId(), role: 'nomi', ...turnFromError(error) }
+      setTurns((prev) => [...prev, turn])
+      return turn
+    } finally { setIsProcessing(false) }
+  }, [chatId, runExecute])
+
+  const editSendDraft = useCallback(async (actionId, draft) => {
+    const { outcome } = await updateSendDraft({ actionId, conversationId: chatId, ...draft })
+    setTurns((prev) => prev.map((turn) => turn.pendingAction?.id === actionId ? { ...turn, pendingAction: { ...turn.pendingAction, ...outcome.pendingAction, preview: outcome.pendingAction.body } } : turn))
+    return outcome.pendingAction
+  }, [chatId])
 
   const retryLast = useCallback(() => {
     if (!lastMessageRef.current) return
@@ -157,7 +181,7 @@ export function useNomiConversation(workspaceType, selectedChatId) {
     })
   }, [runExecute])
 
-  return { turns, isProcessing, processingLabel, send, selectCandidate, respondApproval, retryLast }
+  return { turns, isProcessing, processingLabel, send, selectCandidate, respondApproval, editSendDraft, retryLast }
 }
 
 function restoreTurn(metadata, content) {

@@ -3,6 +3,12 @@ const PRONOUN_TARGET = /\b(?:him|her|them|that\s+person|this\s+person|the\s+send
 const EXPLICIT_SEARCH_OR_READ = /\b(?:find|search|look\s*(?:for|up)|locate|check|scan|read|query|fetch)\b/i;
 const COMPOSE_OR_REPLY = /\b(?:craft|compose|draft|send|write|tell|reply|respond|response|message)\b/i;
 
+const extractExplicitRecipientEmail = (message) => {
+  const normalized = String(message || "").replace(/\[[^\]]+\]\(mailto:([^)]+)\)/ig, "$1");
+  const match = normalized.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match ? match[0].toLowerCase() : null;
+};
+
 const unsupportedRequestReason = (userRequest) => {
   if (typeof userRequest !== "string") return null;
   if (/\b(delete|trash|remove|erase)\b[^.!?]{0,120}\b(emails?|inbox|messages?)\b/i.test(userRequest)) return "unsupported_destructive_request";
@@ -40,7 +46,13 @@ const explicitlyRequestedRecipientPlaceholders = (userRequest, mappings = {}) =>
     .map(([placeholder]) => placeholder);
   return placeholders.filter((placeholder) => {
     const escaped = placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`^\\s*(?:(?:please|can you|could you)\\s+)?(?:send|draft|write|compose)\\b[^.!?]{0,160}\\b(?:to|for)\\s*${escaped}`, "i").test(userRequest);
+    // Accept conversational lead-ins ("Good morning, send a mail to …") and
+    // mailto markdown. Trust still comes only from an address in this user turn.
+    const plainRequest = String(userRequest || "").replace(/\[([^\]]+)\]\(mailto:([^)]+)\)/ig, (_link, label, address) => {
+      const value = /\[EMAIL_\d+\]/i.test(address) ? address : /\[EMAIL_\d+\]/i.test(label) ? label : address;
+      return /^\[EMAIL_\d+\]$/i.test(value) ? value : `[${value}]`;
+    });
+    return new RegExp(`(?:\\b(?:send|draft|write|compose|mail|email|add|invite|include)\\b[^.!?]{0,220}\\b(?:to|for|in)\\s*${escaped}|\\b(?:email|mail)\\s+${escaped})`, "i").test(plainRequest);
   });
 };
 
@@ -53,6 +65,7 @@ const untrustedRequestedMessageId = (userRequest, trustedGmailMessageIds = []) =
 module.exports = {
   MESSAGE_ID_PATTERN,
   PRONOUN_TARGET,
+  extractExplicitRecipientEmail,
   explicitlyRequestedRecipientPlaceholders,
   hasEmbeddedInstruction,
   isExplicitSearchOrReadRequest,

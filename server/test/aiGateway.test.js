@@ -19,6 +19,21 @@ test("gateway normalizes provider failures", async () => {
   assert.deepEqual(result, { status: "provider_error", provider: "groq", reason: "ai_provider_timeout" });
 });
 
+test("ordinary conversation reaches the planner and a valid chat.respond proposal passes through unchanged", async () => {
+  let received;
+  const gateway = createAIGateway({ providerName: "groq", adapters: { groq: { generateIntent: async (prompt) => {
+    received = prompt;
+    return { action: "chat.respond", parameters: fullParams({ body: "Hi! I can help with your Gmail and Calendar." }) };
+  } } } });
+  const result = await gateway.generateIntent({ safeInput: { userRequest: "Hello NOMI", untrustedRetrievedContent: [] } });
+  // Must NOT be short-circuited into a deterministic Gmail search or rejected
+  // as unsupported — it should actually reach the model.
+  assert.ok(received, "planner was not invoked for a plain greeting");
+  assert.equal(result.status, "proposed");
+  assert.equal(result.intent.action, "chat.respond");
+  assert.equal(result.intent.parameters.body, "Hi! I can help with your Gmail and Calendar.");
+});
+
 test("person search phrases are deterministic Gmail search intents without calling the planner", async () => {
   const phrases = [
     ["search paul", "paul"],

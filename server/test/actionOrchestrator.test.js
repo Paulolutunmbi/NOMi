@@ -1,7 +1,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createActionOrchestrator } = require("../src/services/actions/actionOrchestrator");
+const { createActionOrchestrator: createActionOrchestratorReal } = require("../src/services/actions/actionOrchestrator");
 const { sanitizeAuditMetadata } = require("../src/services/actions/actionExecutor");
+
+// Every existing test in this file predates the email-domain sanity check and
+// uses fixture domains like "example.com" that have no real mail server.
+// Default it to "ok" here so those tests stay pure/offline; tests that
+// specifically exercise the domain check override this explicitly.
+const createActionOrchestrator = (options = {}) => createActionOrchestratorReal({ checkEmailDomain: async () => ({ status: "ok" }), ...options });
 
 // Regression coverage for trusted compound-search selection.
 
@@ -362,6 +368,28 @@ test("clarification proposals return structured outcome without executing any pr
   assert.equal(result.message, "Who would you like me to send this to?");
   assert.equal(result.prompt, "Who would you like me to send this to?");
   assert.equal(called, false);
+});
+
+test("chat.respond returns a plain conversational outcome without executing any provider action or touching trusted state", async () => {
+  let called = false;
+  const record = { gmailMessageIds: ["trusted-1"], trustedGmailPerson: { email: "paul@example.com", name: "Paul" }, gmailCandidates: [], retrievedContext: [] };
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async () => { called = true; return { status: "success" }; },
+  });
+  const result = await orchestrator.execute({
+    user: { _id: "u1" },
+    conversationId: "c",
+    message: "Hello NOMI",
+    proposal: { action: "chat.respond", parameters: params({ body: "Hi there! I can help you search, draft, or send email, and manage your calendar." }) },
+  });
+  assert.equal(result.status, "chat");
+  assert.equal(result.action, "chat.respond");
+  assert.equal(result.message, "Hi there! I can help you search, draft, or send email, and manage your calendar.");
+  assert.equal(called, false);
+  // Trusted Gmail state from an earlier turn must be untouched by small talk.
+  assert.deepEqual(record.gmailMessageIds, ["trusted-1"]);
+  assert.equal(record.trustedGmailPerson.email, "paul@example.com");
 });
 
 test("pronoun references resolve safely to single candidate or return ambiguous for multiple", async () => {
@@ -1516,4 +1544,118 @@ test("calendar.delete removes the event from trusted state so it cannot be refer
   });
   assert.equal(reuse.status, "rejected");
   assert.equal(reuse.reason, "untrusted_or_unknown_event_id");
+});
+
+test("gmail.markRead only acts on server-trusted message IDs, never model-supplied ones", async () => {
+  const record = { gmailMessageIds: ["trusted-1", "trusted-2"], gmailCandidates: [], retrievedContext: [] };
+  const calls = [];
+  const executor = async (input) => { calls.push(input); return { status: "success", result: { markedRead: 2 } }; };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: executor });
+  const proposal = { action: "gmail.markRead", parameters: params({ messageId: "attacker-supplied-id" }) };
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "mark them as read", proposal });
+  assert.equal(result.status, "success");
+  assert.equal(result.action, "gmail.markRead");
+  assert.deepEqual(calls[0].payload.messageIds, ["trusted-1", "trusted-2"]);
+  assert.equal(calls[0].payload.messageId, undefined);
+});
+
+test("gmail.markRead is rejected when there are no trusted messages in context", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], retrievedContext: [] };
+  const executor = async () => { throw new Error("should not execute"); };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: executor });
+  const proposal = { action: "gmail.markRead", parameters: params({}) };
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "mark them as read", proposal });
+  assert.equal(result.status, "rejected");
+  assert.equal(result.reason, "no_trusted_messages");
+});
+
+test("gmail.draft with a likely-typo domain is flagged instead of drafted, and never touches the executor", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], retrievedContext: [] };
+  const executor = async () => { throw new Error("should not execute"); };
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record), actionExecutor: executor,
+    checkEmailDomain: async (email) => (email === "paul@gmal.com" ? { status: "likely_typo", domain: "gmal.com", suggestion: "gmail.com", correctedEmail: "paul@gmail.com" } : { status: "ok" }),
+  });
+  const proposal = { action: "gmail.draft", parameters: params({ recipient: "paul@gmal.com", body: "hi" }) };
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "draft an email to paul@gmal.com saying hi", proposal });
+  assert.equal(result.status, "email_domain_warning");
+  assert.equal(result.reason, "likely_typo");
+  assert.equal(result.suggestion, "gmail.com");
+  assert.equal(result.correctedEmail, "paul@gmail.com");
+});
+
+test("gmail.draft to the authenticated user's own address (self marker) skips the domain check", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], retrievedContext: [] };
+  const calls = [];
+  const executor = async (input) => { calls.push(input); return { status: "success", result: { draftId: "d1" } }; };
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record), actionExecutor: executor,
+    checkEmailDomain: async () => { throw new Error("should not be called for self"); },
+  });
+  const selfUser = { _id: "u1", email: "me@example.com" };
+  const proposal = { action: "gmail.draft", parameters: params({ recipient: "myself", body: "note to self" }) };
+  const result = await orchestrator.execute({ user: selfUser, conversationId: "c", message: "draft a note to myself", proposal });
+  assert.equal(result.status, "success");
+  assert.equal(calls[0].payload.recipient, "me@example.com");
+});
+
+test("calendar.create flags a no-mail-server attendee domain and never creates the event", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], retrievedContext: [] };
+  const executor = async () => { throw new Error("should not execute"); };
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record), actionExecutor: executor,
+    checkEmailDomain: async () => ({ status: "no_mail_server", domain: "totallymadeupdomainxyz123.com" }),
+  });
+  const proposal = { action: "calendar.create", parameters: params({ summary: "Sync", startDateTime: "2026-01-01T10:00:00Z", endDateTime: "2026-01-01T10:30:00Z", attendees: "person@totallymadeupdomainxyz123.com" }) };
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "add person@totallymadeupdomainxyz123.com to the meeting", proposal });
+  assert.equal(result.status, "email_domain_warning");
+  assert.equal(result.reason, "no_mail_server");
+});
+
+test("gmail.search surfaces a domain typo hint alongside zero results, without blocking the search", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], retrievedContext: [] };
+  const executor = async () => ({ status: "success", result: { messages: [] } });
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record), actionExecutor: executor,
+    checkEmailDomain: async () => ({ status: "likely_typo", domain: "gmal.com", suggestion: "gmail.com", correctedEmail: "oreoluwapaul0110@gmail.com" }),
+  });
+  const proposal = { action: "gmail.search", parameters: params({ query: "oreoluwapaul0110@gmal.com" }) };
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "search for oreoluwapaul0110@gmal.com", proposal });
+  assert.equal(result.status, "success");
+  assert.equal(result.result.count, 0);
+  assert.deepEqual(result.result.domainHint, { reason: "likely_typo", domain: "gmal.com", suggestion: "gmail.com" });
+});
+
+test("gmail_select:N reads the server-trusted ID at that position, never a client-supplied one", async () => {
+  const record = { gmailMessageIds: ["trusted-1", "trusted-2"], gmailCandidates: [], retrievedContext: [] };
+  const calls = [];
+  const executor = async (input) => {
+    calls.push(input);
+    return { status: "success", result: { message: { id: input.payload.messageId, sender: "Aminat Bello <aminat@example.com>", subject: "Kata", snippet: "Status", date: "2026-01-01", body: "Full body", from: { name: "Aminat Bello", email: "aminat@example.com" } } } };
+  };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record) , actionExecutor: executor });
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "gmail_select:2" });
+  assert.equal(result.status, "success");
+  assert.equal(result.action, "gmail.read");
+  assert.equal(calls[0].payload.messageId, "trusted-2");
+  assert.equal(result.result.message.body, "Full body");
+  assert.equal(record.gmailMessageIds[0], "trusted-2");
+});
+
+test("gmail_select:N is rejected for an out-of-range position and never calls the executor", async () => {
+  const record = { gmailMessageIds: ["trusted-1"], gmailCandidates: [], retrievedContext: [] };
+  const executor = async () => { throw new Error("should not execute"); };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: executor });
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "gmail_select:5" });
+  assert.equal(result.status, "rejected");
+  assert.equal(result.reason, "invalid_gmail_selection");
+});
+
+test("gmail_select:N still requires gmail.read permission approval, just like any other read", async () => {
+  const record = { gmailMessageIds: ["trusted-1"], gmailCandidates: [], retrievedContext: [] };
+  const executor = async () => ({ status: "approval_required", pendingAction: { id: "p1" } });
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: executor });
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "gmail_select:1" });
+  assert.equal(result.status, "approval_required");
+  assert.equal(result.action, "gmail.read");
 });

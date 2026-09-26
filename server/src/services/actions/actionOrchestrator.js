@@ -2,6 +2,7 @@ const { executeAction } = require("./actionExecutor");
 const { resolveIdentity } = require("../identity/identityResolver");
 const { isSelfRecipientMarker, generateSubjectFromBody } = require("../ai/intentValidator");
 const { getAttachmentsForUser, removeAttachments } = require("../attachments/attachmentService");
+const { checkEmailDomain: checkEmailDomainDefault } = require("../validation/emailDomainCheck");
 
 const REPLY_ACTIONS = new Set(["gmail.draft.reply", "gmail.send.reply"]);
 const DRAFT_ACTIONS = new Set(["gmail.draft", "gmail.draft.reply"]);
@@ -16,7 +17,7 @@ const CALENDAR_ACTIONS = new Set(["calendar.search", "calendar.read", "calendar.
 // eventId that is already server-trusted (from a prior calendar.search/read
 // in this conversation), never one invented by the client or the model.
 const CALENDAR_EVENT_ACTIONS = new Set(["calendar.read", "calendar.update", "calendar.delete"]);
-const SUPPORTED_ACTIONS = new Set(["gmail.search", "gmail.read", "gmail.draft", "gmail.send", "gmail.draft.edit", "clarification", ...REPLY_ACTIONS, ...SEARCH_THEN_REPLY_ACTIONS, ...CALENDAR_ACTIONS]);
+const SUPPORTED_ACTIONS = new Set(["gmail.search", "gmail.read", "gmail.draft", "gmail.send", "gmail.draft.edit", "gmail.markRead", "clarification", "chat.respond", ...REPLY_ACTIONS, ...SEARCH_THEN_REPLY_ACTIONS, ...CALENDAR_ACTIONS]);
 const EMAIL = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i;
 const SECRET_KEYS = /token|credential|secret|authorization|api.?key|password/i;
 const PRONOUN_MATCH = /\b(him|her|them|that\s+person|this\s+person|the\s+sender)\b/i;
@@ -274,7 +275,7 @@ const replyActionFor = (compoundAction) => {
   return "gmail.draft.reply"; // search_then_reply and search_then_draft_reply both draft
 };
 
-const createActionOrchestrator = ({ contextService, actionExecutor = executeAction, resolve = resolveIdentity } = {}) => {
+const createActionOrchestrator = ({ contextService, actionExecutor = executeAction, resolve = resolveIdentity, checkEmailDomain = checkEmailDomainDefault } = {}) => {
   if (!contextService) throw new Error("contextService is required");
 
   // Resolve ambiguity: separates identity-level ambiguity from message-level ambiguity.
@@ -447,15 +448,15 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     }
     if (pending.action === "gmail.search") {
       const trustedTarget = { type: "gmail_message", messageId: selected.id, threadId: selected.threadId, email: pending.selectedIdentity?.email, subject: selected.subject };
-      await contextService.update({ userId: user._id, conversationId, pendingInteraction: null, trustedGmailPerson: pending.selectedIdentity, trustedTarget, gmailMessageIds: [selected.id], gmailCandidates: [selected] });
+      await contextService.update({ userId: user._id, conversationId, pendingInteraction: null, trustedGmailPerson: { ...pending.selectedIdentity, source: "selected_conversation" }, trustedTarget, gmailMessageIds: [selected.id], gmailCandidates: [selected] });
       return { status: "success", action: "gmail.conversation.selected", selectedIdentity: pending.selectedIdentity,
         selectedConversation: publicCandidate(selected, 0), result: {} };
     }
-    const payload = { messageId: selected.id, body: pending.body };
+    const payload = { messageId: selected.id, recipient: pending.selectedIdentity?.email || selected.email || null, subject: selected.subject || null, body: pending.body };
     const execution = await actionExecutor({ user, provider: "google", action: pending.action, payload,
       target: { type: "gmail_message", id: selected.id }, approval });
     const publicSelectedConversation = publicCandidate(selected, 0);
-    if (execution.status !== "success") return { status: execution.status, action: pending.action, selectedIdentity: pending.selectedIdentity, selectedConversation: publicSelectedConversation };
+    if (execution.status !== "success") return { status: execution.status, action: pending.action, pendingAction: execution.pendingAction, selectedIdentity: pending.selectedIdentity, selectedConversation: publicSelectedConversation };
     await contextService.update({ userId: user._id, conversationId,
       pendingInteraction: { ...pending, stage: "draft_created", selectedConversation: selected } });
     await persistTrustedTarget({ user, conversationId, candidate: selected });
@@ -613,6 +614,16 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       const resolved = resolveAttendees(intent.parameters.attendees, { message, user });
       if (!resolved.ok) return { status: "rejected", reason: "untrusted_attendee_email" };
       intent.parameters.attendees = resolved.attendees || null;
+      // Same domain sanity check as a new Gmail recipient — skip the
+      // authenticated user's own (already-verified) address.
+      const userEmailLower = typeof user?.email === "string" ? user.email.trim().toLowerCase() : null;
+      for (const attendeeEmail of (resolved.attendees || "").split(",").map((value) => value.trim()).filter(Boolean)) {
+        if (attendeeEmail === userEmailLower) continue;
+        const domainCheck = await checkEmailDomain(attendeeEmail);
+        if (domainCheck.status === "likely_typo" || domainCheck.status === "no_mail_server") {
+          return { status: "email_domain_warning", action: intent.action, reason: domainCheck.status, domain: domainCheck.domain, suggestion: domainCheck.suggestion || null, correctedEmail: domainCheck.correctedEmail || null };
+        }
+      }
     }
     const target = CALENDAR_EVENT_ACTIONS.has(intent.action)
       ? { type: "calendar_event", id: intent.parameters.eventId }
@@ -704,7 +715,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       let attachments;
       try { attachments = await getAttachmentsForUser({ user, attachmentIds: (draft.attachments || []).map((item) => item.id).filter(Boolean) }); }
       catch (error) { return { status: "rejected", reason: error.code || "attachment_not_found" }; }
-      payload = { messageId: draft.messageId, body: draft.body || "", attachments };
+      payload = { messageId: draft.messageId, recipient: draft.recipient || conversation.trustedTarget?.email || "", subject: draft.subject || "", body: draft.body || "", attachments };
       target = { type: "gmail_message", id: draft.messageId };
     } else if (originalAction === "gmail.draft") {
       sendAction = "gmail.send";
@@ -725,7 +736,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     } else {
       return null;
     }
-    const execution = await actionExecutor({ user, provider: "google", action: sendAction, payload, target, approval });
+    const execution = await actionExecutor({ user, provider: "google", action: sendAction, payload, target, approval, conversationId });
     if (execution.status === "success") {
       // Clear the draft context since we've sent it.
       await contextService.update({ userId: user._id, conversationId, trustedDraft: null }).catch(() => {});
@@ -733,7 +744,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
         await removeAttachments({ user, attachmentIds: draft.attachments.map((a) => a.id).filter(Boolean) }).catch(() => {});
       }
     }
-    return { status: execution.status, action: sendAction, result: execution.status === "success" ? safeResult(execution.result) : undefined };
+    return { status: execution.status, action: sendAction, pendingAction: execution.pendingAction, result: execution.status === "success" ? safeResult(execution.result) : undefined };
   };
 
   // Executes the compound "search then reply" flow:
@@ -818,17 +829,39 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     // The server-trusted message ID comes from resolution.identity.id (never from the model or client).
     const trustedMessageId = resolution.identity.id;
     const replyTarget = { type: "gmail_message", id: trustedMessageId };
-    const replyPayload = { messageId: trustedMessageId, body: intent.parameters.body, ...(attachments?.length ? { attachments } : {}) };
+    const replyPayload = { messageId: trustedMessageId, recipient: resolution.identity.email || "", subject: resolution.identity.subject || "", body: intent.parameters.body, ...(attachments?.length ? { attachments } : {}) };
     await persistTrustedTarget({ user, conversationId, candidate: resolution.identity });
-    const replyExecution = await actionExecutor({ user, provider: "google", action: replyAction, payload: replyPayload, target: replyTarget, approval });
+    const replyExecution = await actionExecutor({ user, provider: "google", action: replyAction, payload: replyPayload, target: replyTarget, approval, conversationId });
     if (replyExecution.status !== "success") {
-      return { status: replyExecution.status, action: replyAction };
+      return { status: replyExecution.status, action: replyAction, pendingAction: replyExecution.pendingAction };
     }
     await persistDraftContext({ user, conversationId, action: replyAction, result: replyExecution.result, payload: replyPayload, candidate: resolution.identity });
     if (SEND_ACTIONS.has(replyAction) && attachments?.length) {
       await removeAttachments({ user, attachmentIds: attachments.map((a) => a.id).filter(Boolean) }).catch(() => {});
     }
     return { status: "success", action: replyAction, result: safeResult(replyExecution.result) };
+  };
+
+  // Shared by both the main gmail.read flow and the gmail_select:N shortcut so
+  // clicking a search result behaves exactly like the model proposing gmail.read.
+  const persistReadMessageContext = async ({ user, conversationId, activeConversation, message: msg }) => {
+    const emailMatch = msg.from?.email || (typeof msg.sender === "string" ? msg.sender.match(/<([^<>]+)>/)?.[1] || (EMAIL.test(msg.sender) ? msg.sender : null) : null);
+    const nameClean = msg.from?.name || (typeof msg.sender === "string" ? msg.sender.replace(/<[^>]+>/, "").trim() : null);
+    const readCandidate = {
+      id: msg.id,
+      threadId: cleanText(msg.threadId, 200),
+      email: cleanText(emailMatch, 320),
+      displayName: cleanText(nameClean || msg.sender, 320),
+      subject: cleanText(msg.subject, 500),
+      date: cleanText(msg.date, 100),
+      snippet: cleanText(msg.snippet, 1000),
+    };
+    const existingCandidates = Array.isArray(activeConversation.gmailCandidates) ? activeConversation.gmailCandidates : [];
+    const updatedCandidates = [readCandidate, ...existingCandidates.filter((c) => c.id !== readCandidate.id)].slice(0, 50);
+    const existingIds = Array.isArray(activeConversation.gmailMessageIds) ? activeConversation.gmailMessageIds : [];
+    const updatedIds = [...new Set([readCandidate.id, ...existingIds])].slice(0, 50);
+    const retrievedContext = updatedCandidates.map(({ id, ...candidate }) => ({ source: "gmail", content: JSON.stringify(candidate) }));
+    await contextService.update({ userId: user._id, conversationId, gmailMessageIds: updatedIds, gmailCandidates: updatedCandidates, retrievedContext });
   };
 
   const execute = async ({ user, conversationId, message, proposal, conversation, approval, attachmentIds }) => {
@@ -852,6 +885,22 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       if (!selected?.id) return { status: "rejected", reason: "invalid_calendar_selection" };
       await contextService.update({ userId: user._id, conversationId, trustedCalendarEvent: selected });
       return { status: "success", action: "calendar.selected", result: { event: publicCalendarCandidate(selected, index) } };
+    }
+
+    // Clicking a Gmail search result. The client only ever passes back the
+    // 1-based position it was shown (selectionId) — never a Gmail message ID —
+    // so the actual ID always comes from this conversation's own server-side
+    // trusted list, resolved the same way any other message reference is.
+    const gmailSelection = String(message || "").match(/^gmail_select:(\d+)$/);
+    if (gmailSelection) {
+      const index = Number(gmailSelection[1]) - 1;
+      const trustedIds = Array.isArray(activeConversation.gmailMessageIds) ? activeConversation.gmailMessageIds : [];
+      const id = trustedIds[index];
+      if (!id) return { status: "rejected", reason: "invalid_gmail_selection" };
+      const execution = await actionExecutor({ user, provider: "google", action: "gmail.read", payload: { messageId: id }, target: { type: "gmail_message", id }, approval, conversationId });
+      if (execution.status !== "success") return { status: execution.status, action: "gmail.read", pendingAction: execution.pendingAction };
+      if (execution.result?.message) await persistReadMessageContext({ user, conversationId, activeConversation, message: execution.result.message });
+      return { status: "success", action: "gmail.read", result: safeResult(execution.result) };
     }
 
     const interactionOutcome = await executePendingInteraction({ user, conversationId, message, conversation: activeConversation, approval });
@@ -900,6 +949,13 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       return executeSearchThenReply({ user, conversationId, message, intent, activeConversation, approval, attachments: resolvedAttachments });
     }
 
+    // Plain conversation: no Gmail/Calendar target, no privileged state to
+    // touch. Never routed through actionExecutor/provider calls.
+    if (intent.action === "chat.respond") {
+      const chatText = cleanText(intent.parameters?.body, 4000) || "Hi! How can I help with your email or calendar today?";
+      return { status: "chat", action: "chat.respond", message: chatText, prompt: chatText };
+    }
+
     if (intent.action === "clarification") {
       const clarificationText = cleanText(intent.parameters?.body, 1000) || "Who would you like me to send this to?";
       return {
@@ -912,6 +968,17 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
 
     if (intent.action === "gmail.draft.edit") {
       return executeDraftEdit({ user, conversationId, intent, conversation: activeConversation, approval, attachments: resolvedAttachments.length ? resolvedAttachments : undefined });
+    }
+
+    // Never takes a model-supplied ID. Operates only on whatever message IDs
+    // are already server-trusted in this conversation (from a prior
+    // search/read), the same trust boundary MESSAGE_ACTIONS enforces below.
+    if (intent.action === "gmail.markRead") {
+      const trustedIds = (Array.isArray(activeConversation.gmailMessageIds) ? activeConversation.gmailMessageIds : []).slice(0, 50);
+      if (!trustedIds.length) return { status: "rejected", reason: "no_trusted_messages" };
+      const execution = await actionExecutor({ user, provider: "google", action: intent.action, payload: { messageIds: trustedIds }, target: { type: "gmail_message", id: null }, approval, conversationId });
+      if (execution.status !== "success") return { status: execution.status, action: intent.action, pendingAction: execution.pendingAction };
+      return { status: "success", action: intent.action, result: safeResult(execution.result) };
     }
 
     if (REPLY_ACTIONS.has(intent.action)) {
@@ -949,8 +1016,10 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       && !(activeConversation.gmailMessageIds || []).includes(intent.parameters.messageId)) {
       return { status: "rejected", reason: "untrusted_or_unknown_message_id" };
     }
+    let recipientIsSelf = false;
     if (NEW_MESSAGE_ACTIONS.has(intent.action)) {
       if (isSelfRecipient({ recipient: intent.parameters.recipient })) {
+        recipientIsSelf = true;
         const userEmail = typeof user?.email === "string" && EMAIL.test(user.email.trim()) ? user.email.trim().toLowerCase() : null;
         if (!userEmail) return { status: "rejected", reason: "untrusted_recipient_email" };
         intent.parameters.recipient = userEmail;
@@ -959,14 +1028,29 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
           && String(activeConversation.trustedGmailPerson?.email || "").toLowerCase() !== String(intent.parameters.recipient).toLowerCase())) {
         return { status: "rejected", reason: "untrusted_recipient_email" };
       }
+      // Domain sanity check — a typo-of-a-known-provider or a domain with no
+      // mail server at all is surfaced to the user instead of silently
+      // sending/drafting to it. Never flags an unfamiliar domain that
+      // resolves fine — that's just someone's company address.
+      if (!recipientIsSelf) {
+        const domainCheck = await checkEmailDomain(intent.parameters.recipient);
+        if (domainCheck.status === "likely_typo" || domainCheck.status === "no_mail_server") {
+          return { status: "email_domain_warning", action: intent.action, reason: domainCheck.status, domain: domainCheck.domain, suggestion: domainCheck.suggestion || null, correctedEmail: domainCheck.correctedEmail || null };
+        }
+      }
     }
     const target = MESSAGE_ACTIONS.has(intent.action)
       ? { type: "gmail_message", id: intent.parameters.messageId }
       : { type: "gmail", id: null, label: null };
     const executionPayload = payloadFor(intent);
+    if (REPLY_ACTIONS.has(intent.action)) {
+      const trustedReplyRecipient = activeConversation.trustedTarget?.email
+        || activeConversation.gmailCandidates?.find((candidate) => candidate.id === intent.parameters.messageId)?.email;
+      if (trustedReplyRecipient) executionPayload.recipient = String(trustedReplyRecipient).toLowerCase();
+    }
     if (resolvedAttachments.length) executionPayload.attachments = resolvedAttachments;
-    const execution = await actionExecutor({ user, provider: "google", action: intent.action, payload: executionPayload, target, approval });
-    if (execution.status !== "success") return { status: execution.status, action: intent.action };
+    const execution = await actionExecutor({ user, provider: "google", action: intent.action, payload: executionPayload, target, approval, conversationId });
+    if (execution.status !== "success") return { status: execution.status, action: intent.action, pendingAction: execution.pendingAction };
 
     if (SEND_ACTIONS.has(intent.action) && resolvedAttachments.length) {
       await removeAttachments({ user, attachmentIds: resolvedAttachments.map((a) => a.id).filter(Boolean) }).catch(() => {});
@@ -993,24 +1077,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       const retrievedContext = candidates.map(({ id, ...candidate }) => ({ source: "gmail", content: JSON.stringify(candidate) }));
       await contextService.update({ userId: user._id, conversationId, gmailMessageIds: candidates.map(({ id }) => id), gmailCandidates: candidates, retrievedContext });
     } else if (intent.action === "gmail.read" && execution.result?.message) {
-      const msg = execution.result.message;
-      const emailMatch = typeof msg.sender === "string" ? msg.sender.match(/<([^<>]+)>/)?.[1] || (EMAIL.test(msg.sender) ? msg.sender : null) : null;
-      const nameClean = typeof msg.sender === "string" ? msg.sender.replace(/<[^>]+>/, "").trim() : null;
-      const readCandidate = {
-        id: msg.id,
-        threadId: cleanText(msg.threadId, 200),
-        email: cleanText(emailMatch, 320),
-        displayName: cleanText(nameClean || msg.sender, 320),
-        subject: cleanText(msg.subject, 500),
-        date: cleanText(msg.date, 100),
-        snippet: cleanText(msg.snippet, 1000),
-      };
-      const existingCandidates = Array.isArray(activeConversation.gmailCandidates) ? activeConversation.gmailCandidates : [];
-      const updatedCandidates = [readCandidate, ...existingCandidates.filter((c) => c.id !== readCandidate.id)].slice(0, 50);
-      const existingIds = Array.isArray(activeConversation.gmailMessageIds) ? activeConversation.gmailMessageIds : [];
-      const updatedIds = [...new Set([readCandidate.id, ...existingIds])].slice(0, 50);
-      const retrievedContext = updatedCandidates.map(({ id, ...candidate }) => ({ source: "gmail", content: JSON.stringify(candidate) }));
-      await contextService.update({ userId: user._id, conversationId, gmailMessageIds: updatedIds, gmailCandidates: updatedCandidates, retrievedContext });
+      await persistReadMessageContext({ user, conversationId, activeConversation, message: execution.result.message });
     }
 
     // Persist trusted draft context for follow-up "send it".
@@ -1024,8 +1091,17 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       });
     }
 
+    let searchDomainHint = null;
+    if (intent.action === "gmail.search" && !candidates.length) {
+      const rawQuery = String(intent.parameters.query || "").trim();
+      if (EMAIL.test(rawQuery)) {
+        const domainCheck = await checkEmailDomain(rawQuery);
+        if (domainCheck.status === "likely_typo" || domainCheck.status === "no_mail_server") searchDomainHint = domainCheck;
+      }
+    }
+
     return { status: "success", action: intent.action, result: intent.action === "gmail.search"
-      ? { messages: candidates.map((c, i) => publicCandidate(c, i)), count: candidates.length }
+      ? { messages: candidates.map((c, i) => publicCandidate(c, i)), count: candidates.length, ...(searchDomainHint ? { domainHint: { reason: searchDomainHint.status, domain: searchDomainHint.domain, suggestion: searchDomainHint.suggestion || null } } : {}) }
       : safeResult(execution.result) };
   };
   return { execute, resolveAmbiguity, identityKey, groupCandidatesByIdentity };

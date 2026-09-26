@@ -12,7 +12,7 @@ const findOrCreateFromFirebaseClaims = async (claims) =>
       },
       $setOnInsert: { firebaseUid: claims.uid },
     },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
+    { returnDocument: "after", upsert: true, setDefaultsOnInsert: true }
   );
 
 module.exports = { findOrCreateFromFirebaseClaims };

@@ -1,23 +1,15 @@
 import { Link, NavLink } from 'react-router-dom'
-import NomiLogo, { NomiMark } from './NomiLogo'
+import NomiLogo from './NomiLogo'
 import NetworkBanner from './NetworkBanner'
 import { useAuth } from '../context/AuthContext'
 
 const NAV_ITEMS = [
-  { to: '/app', label: 'Home', icon: HomeIcon },
-  { to: '/app/gmail', label: 'Gmail', icon: MailIcon },
-  { to: '/app/calendar', label: 'Calendar', icon: CalendarIcon },
+  { to: '/app', label: 'Chat', icon: HomeIcon },
   { to: '/app/settings', label: 'Settings', icon: SettingsIcon },
 ]
 
 function HomeIcon(props) {
   return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" {...props}><path d="M3 11.5 12 4l9 7.5M5.5 10v9a1 1 0 0 0 1 1H10v-6h4v6h3.5a1 1 0 0 0 1-1v-9" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
-}
-function MailIcon(props) {
-  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" {...props}><rect x="3.5" y="5.5" width="17" height="13" rx="2" stroke="currentColor" strokeWidth="1.7" /><path d="m4.5 7 6.6 5a1.6 1.6 0 0 0 1.9 0l6.6-5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
-}
-function CalendarIcon(props) {
-  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" {...props}><rect x="3.5" y="5" width="17" height="15" rx="2" stroke="currentColor" strokeWidth="1.7" /><path d="M3.5 9.5h17M8 3v4M16 3v4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" /></svg>
 }
 function SettingsIcon(props) {
   return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" {...props}><circle cx="12" cy="12" r="3.2" stroke="currentColor" strokeWidth="1.7" /><path d="M12 3v2.2M12 18.8V21M4.9 4.9l1.5 1.5M17.6 17.6l1.5 1.5M3 12h2.2M18.8 12H21M4.9 19.1l1.5-1.5M17.6 6.4l1.5-1.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" /></svg>
@@ -80,16 +72,12 @@ export default function AppShell({ children, userLabel, onSignOut }) {
           </div>
         </aside>
 
-        {/* Mobile top bar */}
+        {/* Mobile: Workspace renders its own header (hamburger, title, new chat),
+            so AppShell only needs the bottom nav here. */}
         <div className="flex flex-1 flex-col overflow-hidden">
-          <header className="flex items-center justify-between border-b border-line bg-surface px-4 py-2.5 sm:hidden">
-            <NomiMark size={26} />
-            <span className="text-sm font-semibold text-ink">NOMI</span>
-            <span className="w-6" />
-          </header>
           <main className="flex-1 overflow-hidden">{children}</main>
           {/* Mobile bottom nav */}
-          <nav className="grid grid-cols-4 border-t border-line bg-surface px-2 py-1.5 sm:hidden">
+          <nav className="grid grid-cols-2 border-t border-line bg-surface px-2 py-1.5 sm:hidden">
             {NAV_ITEMS.map((item) => (
               <NavItem key={item.to} {...item} className="flex-col gap-1 px-1 py-1.5 text-[11px]" />
             ))}

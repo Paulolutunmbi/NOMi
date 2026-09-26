@@ -36,11 +36,11 @@ test("gmail.search returns normalized, MIME-free messages and bounds results", a
   assert.equal(JSON.stringify(result).includes("Private plain-text"), false);
 });
 
-test("gmail.read sender parsing remains the original raw header value", async () => {
+test("gmail.read keeps the original raw sender header and now also exposes a parsed from{name,email}, matching gmail.search", async () => {
   const fake = fakeGmail();
   const read = await providerFor(fake).execute({}, "gmail.read", { messageId: "m1" });
   assert.equal(read.message.sender, "Aminat Bello <aminat@example.com>");
-  assert.equal(Object.hasOwn(read.message, "from"), false);
+  assert.deepEqual(read.message.from, { name: "Aminat Bello", email: "aminat@example.com" });
 });
 
 test("gmail.read returns bounded normalized content and rejects missing IDs", async () => {
@@ -108,4 +108,24 @@ test("Gmail and credential failures have safe predictable codes", async () => {
   const integration = createGoogleIntegration({ credentialService: { getGoogleAuthForUser: async () => { const error = new Error("not connected"); error.code = "google_not_connected"; throw error; }, refreshGoogleAccessToken: async () => {} }, gmailProvider: providerFor(fake) });
   await assert.rejects(() => integration.execute({ user: { _id: "u1" }, action: "gmail.search", payload: { query: "x" } }), { code: "google_not_connected" });
   await assert.rejects(() => providerFor(fake).execute({}, "gmail.delete", {}), { code: "gmail_invalid_request" });
+});
+
+test("gmail.markRead batch-removes UNREAD from every provided ID, deduplicated and capped", async () => {
+  const calls = { batchModify: [] };
+  const api = { users: { messages: {
+    batchModify: async (input) => { calls.batchModify.push(input); return {}; },
+  } } };
+  const provider = createGmailProvider({ gmailFactory: () => api });
+  const ids = ["m1", "m2", "m1", ...Array.from({ length: 60 }, (_, i) => `extra-${i}`)];
+  const result = await provider.execute({}, "gmail.markRead", { messageIds: ids });
+  assert.equal(calls.batchModify[0].requestBody.removeLabelIds[0], "UNREAD");
+  assert.equal(calls.batchModify[0].requestBody.ids.length, 50);
+  assert.equal(calls.batchModify[0].requestBody.ids.filter((id) => id === "m1").length, 1);
+  assert.equal(result.markedRead, 50);
+});
+
+test("gmail.markRead rejects when no valid message IDs are provided", async () => {
+  const api = { users: { messages: { batchModify: async () => { throw new Error("should not be called"); } } } };
+  const provider = createGmailProvider({ gmailFactory: () => api });
+  await assert.rejects(provider.execute({}, "gmail.markRead", { messageIds: [] }), (error) => error.code === "gmail_invalid_request");
 });

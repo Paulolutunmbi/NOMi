@@ -2,6 +2,23 @@ const { validateIntent } = require("./intentValidator");
 const { buildIntentPrompt } = require("./promptBoundary");
 const { prepareAIInput } = require("../privacy/privacyService");
 const { explicitlyRequestedRecipientPlaceholders, requiresTargetClarification, unsupportedRequestReason, untrustedRequestedMessageId } = require("./intentSafetyPolicy");
+const crypto = require("node:crypto");
+const addressHash = (value) => typeof value === "string" && /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(value)
+  ? crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex").slice(0, 12) : null;
+
+// Keep diagnostics useful without ever writing model supplied message text,
+// retrieved content, identifiers, or credentials to the application log.
+const intentShapeForLog = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { receivedType: value === null ? "null" : typeof value };
+  const parameters = value.parameters && typeof value.parameters === "object" && !Array.isArray(value.parameters) ? value.parameters : null;
+  return {
+    receivedType: "object",
+    topLevelKeys: Object.keys(value).slice(0, 8),
+    action: typeof value.action === "string" && value.action.length <= 64 ? value.action : typeof value.action,
+    parameterKeys: parameters ? Object.keys(parameters).slice(0, 24) : [],
+    parameterValueTypes: parameters ? Object.fromEntries(Object.entries(parameters).slice(0, 24).map(([key, item]) => [key, item === null ? "null" : Array.isArray(item) ? "array" : typeof item])) : {},
+  };
+};
 
 const personSearchQuery = (message) => {
   const source = String(message || "").trim();
@@ -61,11 +78,33 @@ const createAIGateway = ({ providerName = process.env.AI_PROVIDER, adapters = {}
     }
     try { response = await adapter.generateIntent(prompt); }
     catch (error) { return { status: "provider_error", provider: providerName, reason: error.code || "ai_provider_unavailable" }; }
+    const rawExplicitRecipient = input.explicitRecipientEmail || (String(input.originalUserRequest || input.userRequest || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [])[0] || null;
+    const explicitRecipientEmail = typeof rawExplicitRecipient === "string" ? rawExplicitRecipient.trim().toLowerCase() : null;
+    const modelRecipient = response?.parameters?.recipient;
+    const resolvedModelRecipient = prepared.mappings?.[modelRecipient]?.value || modelRecipient;
+    const recipientMatches = Boolean(explicitRecipientEmail && typeof resolvedModelRecipient === "string" && resolvedModelRecipient.trim().toLowerCase() === explicitRecipientEmail);
+    if (["gmail.send", "gmail.draft"].includes(response?.action)) {
+      console.info(`[AI DEBUG] explicit recipient extracted=${Boolean(explicitRecipientEmail)} hash=${addressHash(explicitRecipientEmail) || "none"}`);
+      console.info(`[AI DEBUG] AI recipient hash=${addressHash(resolvedModelRecipient) || "none"}`);
+      console.info(`[AI DEBUG] recipient comparison=${recipientMatches ? "MATCH" : explicitRecipientEmail ? "MISMATCH" : "NO_EXPLICIT_RECIPIENT"} source=${explicitRecipientEmail ? "explicit_user_email" : "none"} validation_path=aiGateway.validateIntent`);
+    }
     const validation = validateIntent(response, {
       trustedGmailMessageIds: prompt.trustedConversationContext.gmailMessageIds,
       trustedCalendarEventIds: prompt.trustedConversationContext.calendarEventIds,
       recipientPlaceholders: explicitlyRequestedRecipientPlaceholders(prompt.userRequest, prepared.mappings),
+      explicitRecipientEmails: explicitRecipientEmail ? [explicitRecipientEmail] : [],
     });
+    const validationDiagnostic = {
+      stage: "intent_validation",
+      // The provider already parses its structured JSON before returning.
+      // Log only bounded shape metadata; parameter values (including body,
+      // query, addresses, and IDs) are deliberately omitted.
+      rawModelOutputShape: intentShapeForLog(response),
+      parsedIntentShape: intentShapeForLog(response),
+      validation: { valid: validation.valid, ...(validation.reason ? { reason: validation.reason } : {}) },
+    };
+    const diagnostic = `[AI DEBUG] intent validation ${validation.valid ? "passed" : "failed"} ${JSON.stringify(validationDiagnostic)}`;
+    (validation.valid ? console.info : console.warn)(diagnostic);
     if (validation.valid) {
       if (validation.intent.action === "gmail.search" && requiresTargetClarification(prompt.userRequest, prompt.trustedConversationContext.gmailMessageIds)) {
         return { status: "proposed", provider: providerName, intent: defaultClarificationIntent(), placeholderMappings: prepared.mappings };

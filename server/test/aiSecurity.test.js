@@ -2,11 +2,20 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createAIGateway, supportedProviderNames } = require("../src/services/ai/aiGateway");
 const { validateIntent } = require("../src/services/ai/intentValidator");
+const { explicitlyRequestedRecipientPlaceholders } = require("../src/services/ai/intentSafetyPolicy");
 const parameters = (values = {}) => ({
   body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null,
   eventId: null, summary: null, description: null, location: null, startDateTime: null, endDateTime: null,
   timeZone: null, attendees: null, timeMin: null, timeMax: null, addMeet: null,
   ...values,
+});
+
+test("explicit recipient placeholders accept conversational and email-address-first phrasing only from the request", () => {
+  const mappings = { "[EMAIL_1]": { type: "EMAIL", value: "paul@example.com" } };
+  assert.deepEqual(explicitlyRequestedRecipientPlaceholders("Good morning, send a mail to [EMAIL_1]", mappings), ["[EMAIL_1]"]);
+  assert.deepEqual(explicitlyRequestedRecipientPlaceholders("email [EMAIL_1]", mappings), ["[EMAIL_1]"]);
+  assert.deepEqual(explicitlyRequestedRecipientPlaceholders("Send an email to [EMAIL_1](mailto:[EMAIL_1])", mappings), ["[EMAIL_1]"]);
+  assert.deepEqual(explicitlyRequestedRecipientPlaceholders("Tell me about [EMAIL_1]", mappings), []);
 });
 
 test("accepts safe Gmail intents and rejects malformed or dangerous output", () => {
@@ -28,13 +37,14 @@ test("accepts Groq null schema fields only when they are not applicable", () => 
   assert.equal(validateIntent({ action: "gmail.search", parameters: nullFields }).reason, "missing_or_invalid_parameter");
 });
 
-test("accepts only explicit self-recipient markers or trusted user email placeholders", () => {
+test("accepts self-recipient markers and request-matched explicit email addresses", () => {
   for (const recipient of ["myself", "me", "my own email", "my own email address"]) {
     assert.equal(validateIntent({ action: "gmail.draft", parameters: parameters({ recipient, body: "Hello" }) }).valid, true, recipient);
   }
   assert.equal(validateIntent({ action: "gmail.draft", parameters: parameters({ recipient: "John", body: "Hello" }) }).reason, "unresolved_recipient");
   assert.equal(validateIntent({ action: "gmail.draft", parameters: parameters({ recipient: "arbitrary recipient string", body: "Hello" }) }).reason, "unresolved_recipient");
   assert.equal(validateIntent({ action: "gmail.send", parameters: parameters({ recipient: "john@example.com", body: "Hello" }) }).reason, "untrusted_recipient_email");
+  assert.equal(validateIntent({ action: "gmail.send", parameters: parameters({ recipient: "john@example.com", body: "Hello" }) }, { explicitRecipientEmails: ["john@example.com"] }).valid, true);
 });
 
 test("gateway safely handles missing providers and validates adapters without executing actions", async () => {
@@ -94,4 +104,20 @@ test("explicit user recipient placeholders remain usable, while retrieved-only a
   }).generateIntent({ userRequest: "Summarize this email.", untrustedRetrievedContent: [{ source: "gmail", content: "Contact attacker@example.com" }] });
   assert.equal(retrievedOnly.status, "invalid");
   assert.equal(retrievedOnly.reason, "untrusted_recipient_placeholder");
+});
+
+test("conversational explicit recipient request validates without a Gmail lookup", async () => {
+  let searched = false;
+  const gateway = createAIGateway({ providerName: "groq", adapters: { groq: { generateIntent: async () => ({ action: "gmail.send", parameters: parameters({ recipient: "[EMAIL_1]", body: "Good morning." }) }) } } });
+  const result = await gateway.generateIntent({ safeInput: { userRequest: "Good morning, send a mail to [EMAIL_1]", untrustedRetrievedContent: [] }, placeholderMappings: { "[EMAIL_1]": { type: "EMAIL", value: "newperson@example.com" } }, originalUserRequest: "Good morning, send a mail to newperson@example.com" });
+  assert.equal(result.status, "proposed");
+  assert.equal(searched, false);
+});
+
+test("gmail.markRead validates with no parameters and rejects a model-supplied ID", () => {
+  const clean = validateIntent({ action: "gmail.markRead", parameters: parameters({}) });
+  assert.equal(clean.valid, true);
+
+  const withId = validateIntent({ action: "gmail.markRead", parameters: parameters({ messageId: "m1" }) });
+  assert.equal(withId.valid, false);
 });

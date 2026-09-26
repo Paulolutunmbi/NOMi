@@ -6,6 +6,7 @@ const { createAIGateway } = require("../services/ai/aiGateway");
 const { createGroqProvider } = require("../services/ai/groqProvider");
 const { getAIConfig } = require("../config/ai");
 const { writeAIAudit } = require("../services/ai/aiAuditService");
+const { extractExplicitRecipientEmail } = require("../services/ai/intentSafetyPolicy");
 
 const MAX_MESSAGE_LENGTH = 4000;
 const validConversationId = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
@@ -36,6 +37,8 @@ const createAIIntentRouter = ({ gateway, contextService = createConversationCont
       const result = await selectedGateway.generateIntent({
         safeInput: safe.payload,
         placeholderMappings: safe.mappings,
+        originalUserRequest: message,
+        explicitRecipientEmail: extractExplicitRecipientEmail(message),
         trustedConversationContext: { gmailMessageIds: conversation.gmailMessageIds || [], calendarEventIds: conversation.calendarEventIds || [] },
       });
       if (result.status === "proposed") {

@@ -60,7 +60,7 @@ const normalizeTrustedTarget = (value) => {
   return { type, messageId, threadId, email, subject };
 };
 const normalizeTrustedGmailPerson = (value) => value && typeof value.email === "string" && /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(value.email)
-  ? { email: value.email.toLowerCase(), name: typeof value.name === "string" ? value.name.slice(0, 320) : null } : null;
+  ? { email: value.email.toLowerCase(), name: typeof value.name === "string" ? value.name.slice(0, 320) : null, source: ["explicit_user_email", "selected_person", "selected_conversation"].includes(value.source) ? value.source : "selected_person" } : null;
 const normalizeTrustedDraft = (value) => {
   if (!value || typeof value !== "object") return null;
   const draftId = typeof value.draftId === "string" && value.draftId.trim() ? value.draftId.slice(0, 200) : null;
@@ -161,7 +161,7 @@ const createConversationContextService = (model = TemporaryConversation, { ttlMs
     if (calendarEventIds !== undefined) updateData.$set.calendarEventIds = normalizeCalendarEventIds(calendarEventIds);
     if (calendarCandidates !== undefined) updateData.$set.calendarCandidates = normalizeCalendarCandidates(calendarCandidates);
     if (trustedCalendarEvent !== undefined) updateData.$set.trustedCalendarEvent = normalizeTrustedCalendarEvent(trustedCalendarEvent);
-    return model.findOneAndUpdate({ conversationId, user: userId, expiresAt: { $gt: now() } }, updateData, { new: true });
+    return model.findOneAndUpdate({ conversationId, user: userId, expiresAt: { $gt: now() } }, updateData, { returnDocument: "after" });
   };
   const cleanupExpired = () => model.deleteMany({ expiresAt: { $lte: now() } });
   return { create, getActive, update, cleanupExpired };

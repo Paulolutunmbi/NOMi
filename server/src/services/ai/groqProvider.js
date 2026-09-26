@@ -11,7 +11,7 @@ const INTENT_SCHEMA = {
       action: {
         type: "string",
         enum: [
-          "gmail.read", "gmail.search", "gmail.draft", "gmail.send", "gmail.draft.reply", "gmail.send.reply", "gmail.draft.edit", "clarification",
+          "gmail.read", "gmail.search", "gmail.draft", "gmail.send", "gmail.draft.reply", "gmail.send.reply", "gmail.draft.edit", "clarification", "chat.respond",
           "gmail.search_then_reply", "gmail.search_then_draft_reply", "gmail.search_then_send_reply",
           "calendar.search", "calendar.read", "calendar.freebusy", "calendar.create", "calendar.update", "calendar.delete",
         ],

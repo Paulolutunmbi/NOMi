@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { uploadAttachment, deleteAttachment, NomiApiError } from '../api/nomiClient'
 import {
   ALLOWED_MIME_TYPES,
@@ -44,10 +44,25 @@ function AttachmentChip({ attachment, onRemove }) {
   )
 }
 
-export default function Composer({ placeholder, disabled, onSend, chatId }) {
+export default function Composer({ placeholder, disabled, onSend, chatId, draftText }) {
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
   const [attachments, setAttachments] = useState([])
+
+  // A "Reply" / "Send to this address" button on a message card sets
+  // draftText (with a fresh token each click, since re-clicking the same
+  // button should re-focus and re-fill even if the text is identical).
+  useEffect(() => {
+    if (!draftText) return
+    const el = textareaRef.current
+    if (!el) return
+    el.value = draftText.text
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftText?.token])
 
   const readyAttachments = attachments.filter((a) => a.status === 'ready')
   const hasUploading = attachments.some((a) => a.status === 'uploading')

@@ -1,4 +1,4 @@
-import { friendlyAction } from '../utils/actionLabels'
+import { useState } from 'react'
 
 function initials(name, email) {
   const source = name || email || '?'
@@ -90,39 +90,51 @@ export function CalendarCandidates({ candidates, onSelect, disabled, title = 'Wh
   )
 }
 
-export function ApprovalCard({ action, onDecide, disabled }) {
+export function ApprovalCard({ action, pendingAction, onDecide, onEdit, disabled }) {
+  const [recipient, setRecipient] = useState(pendingAction?.recipient || '')
+  const [subject, setSubject] = useState(pendingAction?.subject || '')
+  const [body, setBody] = useState(pendingAction?.body || pendingAction?.preview || '')
+  const [saved, setSaved] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const isSend = Boolean(pendingAction) || ['gmail.send', 'gmail.send.reply'].includes(action)
   return (
     <div className="nomi-enter space-y-3 rounded-2xl border border-nomi-orange/40 bg-nomi-orange-tint p-4">
       <div>
         <p className="text-sm font-semibold text-ink">Ready when you are</p>
         <p className="mt-1 text-sm text-ink-soft">
-          NOMI is asking to {friendlyAction(action)}. This approval only covers this one action.
+          {isSend ? 'Review this email. Approval covers this send only.' : `NOMI is asking to ${friendlyAction(action)}.`}
         </p>
+        {pendingAction && <div className="mt-3 space-y-3 rounded-lg border border-line bg-surface p-3 text-sm text-ink-soft">
+          <label className="block">To<input className="mt-1 w-full rounded border border-line bg-surface px-2 py-1 text-ink" value={recipient} disabled={disabled || saving} onChange={(e) => { setRecipient(e.target.value); setSaved(false) }} /></label>
+          <label className="block">Subject<input className="mt-1 w-full rounded border border-line bg-surface px-2 py-1 text-ink" value={subject} disabled={disabled || saving} onChange={(e) => { setSubject(e.target.value); setSaved(false) }} /></label>
+          <label className="block">Message<textarea className="mt-1 min-h-32 w-full rounded border border-line bg-surface px-2 py-1 text-ink" value={body} disabled={disabled || saving} onChange={(e) => { setBody(e.target.value); setSaved(false) }} /></label>
+          {!saved && <button type="button" disabled={disabled || saving} className="rounded border border-line px-3 py-1.5 text-ink disabled:opacity-60" onClick={async () => { setSaving(true); try { await onEdit(pendingAction.id, { recipient, subject, body }); setSaved(true) } finally { setSaving(false) } }}>{saving ? 'Saving…' : 'Save draft changes'}</button>}
+        </div>}
       </div>
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          disabled={disabled}
-          onClick={() => onDecide('allow_once')}
+          disabled={disabled || !saved || saving}
+          onClick={() => onDecide(pendingAction?.id, isSend ? 'allow' : 'allow_once')}
           className="rounded-lg bg-nomi-orange px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-nomi-orange-dark disabled:opacity-60"
         >
-          Allow once
+          {isSend ? 'Allow' : 'Allow once'}
         </button>
-        <button
+        {!isSend && <button
           type="button"
           disabled={disabled}
-          onClick={() => onDecide('always_allow')}
+          onClick={() => onDecide(undefined, 'always_allow')}
           className="rounded-lg border border-line-strong bg-surface px-3.5 py-2 text-sm font-medium text-ink transition-colors hover:border-nomi-orange disabled:opacity-60"
         >
           Always allow
-        </button>
+        </button>}
         <button
           type="button"
           disabled={disabled}
-          onClick={() => onDecide('deny')}
+          onClick={() => onDecide(pendingAction?.id, isSend ? 'deny' : 'deny')}
           className="rounded-lg px-3.5 py-2 text-sm font-medium text-ink-faint transition-colors hover:text-danger disabled:opacity-60"
         >
-          Cancel
+          {isSend ? 'Deny' : 'Cancel'}
         </button>
       </div>
     </div>
@@ -147,18 +159,48 @@ function EventCard({ event }) {
   )
 }
 
-function MessagePreview({ message }) {
-  return (
-    <div className="rounded-xl border border-line bg-surface p-3.5">
-      <div className="flex items-start gap-3">
-        <Avatar name={message.displayName || message.sender} email={message.email} />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-ink">{message.subject || 'No subject'}</p>
-          <p className="mt-0.5 truncate text-xs text-ink-faint">{message.sender || message.email || 'Unknown sender'}{message.date ? ` · ${message.date}` : ''}</p>
-          {message.snippet && <p className="mt-1 line-clamp-2 text-xs text-ink-faint">{message.snippet}</p>}
-          {message.body && <p className="mt-2 whitespace-pre-wrap text-sm text-ink-soft">{message.body}</p>}
-        </div>
+function MessagePreview({ message, onOpen, onComposeHint }) {
+  const email = message.from?.email || message.email || null
+  const displayName = message.from?.name || message.displayName || message.sender || null
+  const isFullMessage = typeof message.body === 'string' && message.body.length > 0
+  const content = (
+    <div className="flex items-start gap-3">
+      <Avatar name={displayName} email={email} />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-semibold text-ink">{message.subject || 'No subject'}</p>
+        <p className="mt-0.5 truncate text-xs text-ink-faint">{message.sender || email || 'Unknown sender'}{message.date ? ` · ${message.date}` : ''}</p>
+        {message.snippet && !isFullMessage && <p className="mt-1 line-clamp-2 text-xs text-ink-faint">{message.snippet}</p>}
+        {isFullMessage && <p className="mt-2 whitespace-pre-wrap text-sm text-ink-soft">{message.body}</p>}
       </div>
+    </div>
+  )
+  return (
+    <div className={`rounded-xl border border-line bg-surface p-3.5 ${onOpen ? 'transition-colors hover:border-nomi-orange' : ''}`}>
+      {onOpen ? (
+        <button type="button" onClick={onOpen} className="block w-full text-left" aria-label={`Open email: ${message.subject || 'No subject'}`}>
+          {content}
+        </button>
+      ) : content}
+      {isFullMessage && onComposeHint && (
+        <div className="mt-3 flex flex-wrap gap-2 border-t border-line pt-3">
+          <button
+            type="button"
+            onClick={() => onComposeHint(`Reply to this email${displayName ? ` from ${displayName}` : ''} and say `)}
+            className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-ink-soft transition-colors hover:border-nomi-orange hover:text-ink"
+          >
+            Reply
+          </button>
+          {email && (
+            <button
+              type="button"
+              onClick={() => onComposeHint(`Send an email to ${email} saying `)}
+              className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-ink-soft transition-colors hover:border-nomi-orange hover:text-ink"
+            >
+              Message {displayName || email}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -193,7 +235,7 @@ function DraftOrSendConfirmation({ action, attachmentsMeta, selectedIdentity, se
   )
 }
 
-export function SuccessCard({ action, result, attachmentsMeta, selectedIdentity, selectedConversation, onSelectCandidate }) {
+export function SuccessCard({ action, result, attachmentsMeta, selectedIdentity, selectedConversation, onSelectCandidate, onComposeHint }) {
   if (action === 'gmail.person.selected' && selectedIdentity) {
     return <div className="nomi-enter rounded-xl border border-line bg-surface p-4"><p className="text-sm font-medium text-ink">Selected person</p><p className="mt-1 text-sm text-ink-soft">{selectedIdentity.name || selectedIdentity.email} &lt;{selectedIdentity.email}&gt;</p><p className="mt-2 text-xs text-ink-faint">Tell NOMI what you would like to say.</p></div>
   }
@@ -201,11 +243,25 @@ export function SuccessCard({ action, result, attachmentsMeta, selectedIdentity,
     return <div className="nomi-enter rounded-xl border border-line bg-surface p-4"><p className="text-sm font-medium text-ink">Selected person</p><p className="text-sm text-ink-soft">{selectedIdentity.name || selectedIdentity.email} &lt;{selectedIdentity.email}&gt;</p><p className="mt-2 text-sm font-medium text-ink">Selected conversation</p><p className="text-sm text-ink-soft">{selectedConversation.subject}</p></div>
   }
   if (action === 'gmail.search' && Array.isArray(result?.messages)) {
-    if (!result.messages.length) return <EmptyInline text="No matching emails found." />
-    return <div className="nomi-enter space-y-2">{result.messages.map((m, i) => <MessagePreview key={i} message={m} />)}</div>
+    if (!result.messages.length) {
+      const hint = result?.domainHint
+      const hintText = hint
+        ? (hint.reason === 'likely_typo'
+          ? ` Also, "${hint.domain}" looks like it might be a typo of "${hint.suggestion}" — worth checking.`
+          : ` Also, "${hint.domain}" doesn't look like it can receive mail — worth double-checking that address.`)
+        : ''
+      return <EmptyInline text={`No matching emails found.${hintText}`} />
+    }
+    return (
+      <div className="nomi-enter space-y-2">
+        {result.messages.map((m, i) => (
+          <MessagePreview key={i} message={m} onOpen={onSelectCandidate ? () => onSelectCandidate(`gmail_select:${i + 1}`) : undefined} />
+        ))}
+      </div>
+    )
   }
   if (action === 'gmail.read' && result?.message) {
-    return <div className="nomi-enter"><MessagePreview message={result.message} /></div>
+    return <div className="nomi-enter"><MessagePreview message={result.message} onComposeHint={onComposeHint} /></div>
   }
   if (['gmail.draft', 'gmail.send', 'gmail.draft.reply', 'gmail.send.reply', 'gmail.draft.edit'].includes(action)) {
     return <DraftOrSendConfirmation action={action} attachmentsMeta={attachmentsMeta} selectedIdentity={selectedIdentity} selectedConversation={selectedConversation} />
@@ -227,6 +283,10 @@ export function SuccessCard({ action, result, attachmentsMeta, selectedIdentity,
   }
   if (action === 'calendar.delete') {
     return <DeletedConfirmation label="Event deleted" />
+  }
+  if (action === 'gmail.markRead') {
+    const count = Number(result?.markedRead) || 0
+    return <DeletedConfirmation label={count === 1 ? 'Marked 1 message as read' : `Marked ${count} messages as read`} />
   }
   if (action === 'calendar.freebusy' && Array.isArray(result?.busy)) {
     if (!result.busy.length) return <p className="nomi-enter text-sm text-ink-soft">You're free across that window.</p>
@@ -258,3 +318,4 @@ function DeletedConfirmation({ label }) {
 export function EmptyInline({ text }) {
   return <p className="nomi-enter text-sm text-ink-faint">{text}</p>
 }
+import { friendlyAction } from '../utils/actionLabels'
