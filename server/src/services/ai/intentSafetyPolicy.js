@@ -3,10 +3,15 @@ const PRONOUN_TARGET = /\b(?:him|her|them|that\s+person|this\s+person|the\s+send
 const EXPLICIT_SEARCH_OR_READ = /\b(?:find|search|look\s*(?:for|up)|locate|check|scan|read|query|fetch)\b/i;
 const COMPOSE_OR_REPLY = /\b(?:craft|compose|draft|send|write|tell|reply|respond|response|message)\b/i;
 
-const extractExplicitRecipientEmail = (message) => {
+const extractExplicitRecipientEmail = (message) => extractExplicitRecipientEmails(message)[0] || null;
+
+// All distinct addresses the user literally typed in their current message —
+// not just the first. Needed for calendar invites, which (unlike a Gmail
+// send) can legitimately name more than one address in a single request.
+const extractExplicitRecipientEmails = (message) => {
   const normalized = String(message || "").replace(/\[[^\]]+\]\(mailto:([^)]+)\)/ig, "$1");
-  const match = normalized.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  return match ? match[0].toLowerCase() : null;
+  const matches = normalized.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig) || [];
+  return [...new Set(matches.map((address) => address.toLowerCase()))];
 };
 
 const unsupportedRequestReason = (userRequest) => {
@@ -66,6 +71,7 @@ module.exports = {
   MESSAGE_ID_PATTERN,
   PRONOUN_TARGET,
   extractExplicitRecipientEmail,
+  extractExplicitRecipientEmails,
   explicitlyRequestedRecipientPlaceholders,
   hasEmbeddedInstruction,
   isExplicitSearchOrReadRequest,

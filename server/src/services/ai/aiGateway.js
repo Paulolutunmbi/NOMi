@@ -1,7 +1,7 @@
 const { validateIntent } = require("./intentValidator");
 const { buildIntentPrompt } = require("./promptBoundary");
 const { prepareAIInput } = require("../privacy/privacyService");
-const { explicitlyRequestedRecipientPlaceholders, requiresTargetClarification, unsupportedRequestReason, untrustedRequestedMessageId } = require("./intentSafetyPolicy");
+const { explicitlyRequestedRecipientPlaceholders, extractExplicitRecipientEmails, requiresTargetClarification, unsupportedRequestReason, untrustedRequestedMessageId } = require("./intentSafetyPolicy");
 const crypto = require("node:crypto");
 const addressHash = (value) => typeof value === "string" && /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(value)
   ? crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex").slice(0, 12) : null;
@@ -78,8 +78,14 @@ const createAIGateway = ({ providerName = process.env.AI_PROVIDER, adapters = {}
     }
     try { response = await adapter.generateIntent(prompt); }
     catch (error) { return { status: "provider_error", provider: providerName, reason: error.code || "ai_provider_unavailable" }; }
-    const rawExplicitRecipient = input.explicitRecipientEmail || (String(input.originalUserRequest || input.userRequest || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [])[0] || null;
+    const rawExplicitRecipient = input.explicitRecipientEmail || extractExplicitRecipientEmails(input.originalUserRequest || input.userRequest)[0] || null;
     const explicitRecipientEmail = typeof rawExplicitRecipient === "string" ? rawExplicitRecipient.trim().toLowerCase() : null;
+    // Every address the user actually typed this turn, not just the first —
+    // a calendar invite can legitimately name more than one attendee.
+    const explicitRecipientEmailsList = [...new Set([
+      ...(explicitRecipientEmail ? [explicitRecipientEmail] : []),
+      ...extractExplicitRecipientEmails(input.originalUserRequest || input.userRequest),
+    ])];
     const modelRecipient = response?.parameters?.recipient;
     const resolvedModelRecipient = prepared.mappings?.[modelRecipient]?.value || modelRecipient;
     const recipientMatches = Boolean(explicitRecipientEmail && typeof resolvedModelRecipient === "string" && resolvedModelRecipient.trim().toLowerCase() === explicitRecipientEmail);
@@ -92,7 +98,7 @@ const createAIGateway = ({ providerName = process.env.AI_PROVIDER, adapters = {}
       trustedGmailMessageIds: prompt.trustedConversationContext.gmailMessageIds,
       trustedCalendarEventIds: prompt.trustedConversationContext.calendarEventIds,
       recipientPlaceholders: explicitlyRequestedRecipientPlaceholders(prompt.userRequest, prepared.mappings),
-      explicitRecipientEmails: explicitRecipientEmail ? [explicitRecipientEmail] : [],
+      explicitRecipientEmails: explicitRecipientEmailsList,
     });
     const validationDiagnostic = {
       stage: "intent_validation",

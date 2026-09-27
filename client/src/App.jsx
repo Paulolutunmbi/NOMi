@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import AppShell from './components/AppShell'
 import { RequireAuth, RequireGuest } from './components/RouteGuards'
 import { useAuth } from './context/AuthContext'
+import { ChatSidebarProvider } from './context/ChatSidebarContext'
 import RootRoute from './pages/RootRoute'
 import SignIn from './pages/SignIn'
 import SignUp from './pages/SignUp'
@@ -14,17 +15,19 @@ function AuthenticatedApp() {
   const { user, signOut } = useAuth()
 
   return (
-    <AppShell userLabel={user?.email} onSignOut={signOut}>
-      <Routes>
-        <Route index element={<Home />} />
-        <Route path="chat/:chatId" element={<Home />} />
-        <Route path="settings" element={<Settings />} />
-        {/* Gmail and Calendar used to be separate tabs with their own chat
-            threads — mail and calendar are both available from any chat now,
-            so old bookmarked links just land on the unified chat list. */}
-        <Route path="*" element={<Navigate to="/app" replace />} />
-      </Routes>
-    </AppShell>
+    <ChatSidebarProvider>
+      <AppShell userLabel={user?.email} onSignOut={signOut}>
+        <Routes>
+          <Route index element={<Home />} />
+          <Route path="chat/:chatId" element={<Home />} />
+          <Route path="settings" element={<Settings />} />
+          {/* Gmail and Calendar used to be separate tabs with their own chat
+              threads — mail and calendar are both available from any chat now,
+              so old bookmarked links just land on the unified chat list. */}
+          <Route path="*" element={<Navigate to="/app" replace />} />
+        </Routes>
+      </AppShell>
+    </ChatSidebarProvider>
   )
 }
 

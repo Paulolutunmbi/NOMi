@@ -70,7 +70,7 @@ export default function ChatMessage({ turn, isLatest, onSelectCandidate, onDecid
           <CalendarCandidates candidates={turn.candidates} onSelect={onSelectCandidate} disabled={!interactive} />
         )}
         {turn.kind === 'approval_required' && (
-          <ApprovalCard action={turn.action} pendingAction={turn.pendingAction} onDecide={onDecideApproval} onEdit={onEditSendDraft} disabled={!interactive} />
+          <ApprovalCard action={turn.action} pendingAction={turn.pendingAction} attachmentsMeta={turn.attachmentsMeta} onDecide={onDecideApproval} onEdit={onEditSendDraft} disabled={!interactive} />
         )}
         {turn.kind === 'success' && <SuccessCard action={turn.action} result={turn.result} attachmentsMeta={turn.attachmentsMeta} selectedIdentity={turn.selectedIdentity} selectedConversation={turn.selectedConversation} onSelectCandidate={onSelectCandidate} onComposeHint={onComposeHint} />}
         {turn.kind === 'error' && <ErrorState kind={turn.errorKind} onRetry={onRetry} onReconnect={onReconnect} />}

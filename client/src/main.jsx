@@ -19,3 +19,15 @@ createRoot(document.getElementById('root')).render(
     </AuthProvider>
   </StrictMode>,
 )
+
+// Register the service worker after the page has loaded so it never
+// competes with the initial render for bandwidth/CPU. Skipped in dev so
+// Vite's HMR isn't shadowed by a stale cached module.
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      // Installability/offline support is a bonus, not a requirement — a
+      // failed registration should never block the app from working.
+    })
+  })
+}

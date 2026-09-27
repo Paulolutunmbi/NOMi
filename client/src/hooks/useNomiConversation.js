@@ -23,8 +23,16 @@ function turnFromOutcome(outcome, attachmentsMeta) {
       }
       return turn
     }
-    case 'approval_required':
-      return { kind: 'approval_required', action: outcome.action, pendingAction: outcome.pendingAction || null, selectedIdentity: outcome.selectedIdentity || null, selectedConversation: outcome.selectedConversation || null }
+    case 'approval_required': {
+      const turn = { kind: 'approval_required', action: outcome.action, pendingAction: outcome.pendingAction || null, selectedIdentity: outcome.selectedIdentity || null, selectedConversation: outcome.selectedConversation || null }
+      // The server tells us definitively whether this pending send actually
+      // carries attachments (pendingAction.attachmentsMeta); fall back to
+      // what we know we attached this turn only if the server didn't say.
+      const serverAttachmentsMeta = outcome.pendingAction?.attachmentsMeta
+      if (serverAttachmentsMeta?.length) turn.attachmentsMeta = serverAttachmentsMeta
+      else if (attachmentsMeta?.length && CARRIES_ATTACHMENTS.test(outcome.action || '')) turn.attachmentsMeta = attachmentsMeta
+      return turn
+    }
     case 'denied':
       return { kind: 'denied', action: outcome.action }
     case 'ambiguous_identity':

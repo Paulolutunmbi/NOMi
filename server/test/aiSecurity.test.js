@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createAIGateway, supportedProviderNames } = require("../src/services/ai/aiGateway");
 const { validateIntent } = require("../src/services/ai/intentValidator");
-const { explicitlyRequestedRecipientPlaceholders } = require("../src/services/ai/intentSafetyPolicy");
+const { explicitlyRequestedRecipientPlaceholders, extractExplicitRecipientEmails } = require("../src/services/ai/intentSafetyPolicy");
 const parameters = (values = {}) => ({
   body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null,
   eventId: null, summary: null, description: null, location: null, startDateTime: null, endDateTime: null,
@@ -120,4 +120,35 @@ test("gmail.markRead validates with no parameters and rejects a model-supplied I
 
   const withId = validateIntent({ action: "gmail.markRead", parameters: parameters({ messageId: "m1" }) });
   assert.equal(withId.valid, false);
+});
+
+test("a calendar attendee address the user literally typed this turn is trusted regardless of phrasing", () => {
+  const message = "add a google meet link to it and also add oreoluwapaul0110@gmail.com to the meeting";
+  const explicitRecipientEmails = extractExplicitRecipientEmails(message);
+  const result = validateIntent(
+    { action: "calendar.update", parameters: parameters({ eventId: "evt-1", attendees: "oreoluwapaul0110@gmail.com", addMeet: true }) },
+    { trustedCalendarEventIds: ["evt-1"], recipientPlaceholders: explicitlyRequestedRecipientPlaceholders(message, {}), explicitRecipientEmails },
+  );
+  assert.equal(result.valid, true);
+});
+
+test("a calendar attendee address the model invents, never typed by the user, is still rejected", () => {
+  const message = "add a google meet link to it";
+  const result = validateIntent(
+    { action: "calendar.update", parameters: parameters({ eventId: "evt-1", attendees: "attacker@example.com", addMeet: true }) },
+    { trustedCalendarEventIds: ["evt-1"], recipientPlaceholders: [], explicitRecipientEmails: extractExplicitRecipientEmails(message) },
+  );
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, "untrusted_recipient_email");
+});
+
+test("multiple calendar attendees typed in one message are each individually trusted", () => {
+  const message = "invite alice@example.com and bob@example.com to the meeting";
+  const explicitRecipientEmails = extractExplicitRecipientEmails(message);
+  assert.deepEqual(explicitRecipientEmails, ["alice@example.com", "bob@example.com"]);
+  const result = validateIntent(
+    { action: "calendar.create", parameters: parameters({ summary: "Sync", startDateTime: "2026-01-01T10:00:00Z", endDateTime: "2026-01-01T10:30:00Z", attendees: "alice@example.com,bob@example.com" }) },
+    { recipientPlaceholders: [], explicitRecipientEmails },
+  );
+  assert.equal(result.valid, true);
 });

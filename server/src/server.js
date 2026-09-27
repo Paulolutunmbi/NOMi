@@ -44,7 +44,12 @@ app.get("/api/health", (req, res) => {
 });
 
 app.use((error, req, res, next) => {
-  console.error("Unhandled API error:", error.message);
+  // The message alone (previous behavior) hides exactly where an error
+  // came from, which made bugs like this one hard to track down from the
+  // terminal. Logging the route and full stack costs nothing in production
+  // and saves real debugging time; the response body to the client is
+  // unchanged.
+  console.error(`Unhandled API error on ${req.method} ${req.originalUrl}:`, error.stack || error.message);
   res.status(500).json({ success: false, message: "Internal server error" });
 });
 

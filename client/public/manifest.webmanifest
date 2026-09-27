@@ -1,0 +1,17 @@
+{
+  "name": "NOMI",
+  "short_name": "NOMI",
+  "description": "NOMI — your intelligent workspace for email and calendar.",
+  "start_url": "/app",
+  "id": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#17140F",
+  "theme_color": "#17140F",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -237,8 +237,13 @@ const calendarPayloadFor = (intent) => {
   if (action === "calendar.freebusy") return { timeMin: p.timeMin, timeMax: p.timeMax };
   if (action === "calendar.read" || action === "calendar.delete") return { eventId: p.eventId };
   if (action === "calendar.create") {
+    // The model isn't required to supply endDateTime (see intentValidator):
+    // when the user never mentioned an end time or duration, default the
+    // event to one hour long rather than failing the whole request.
+    const start = new Date(p.startDateTime);
+    const defaultEnd = !Number.isNaN(start.getTime()) ? new Date(start.getTime() + 60 * 60 * 1000).toISOString() : undefined;
     return { summary: p.summary, description: p.description || undefined, location: p.location || undefined,
-      startDateTime: p.startDateTime, endDateTime: p.endDateTime, timeZone: p.timeZone || undefined,
+      startDateTime: p.startDateTime, endDateTime: p.endDateTime || defaultEnd, timeZone: p.timeZone || undefined,
       attendees: p.attendees || undefined, addMeet: !!p.addMeet };
   }
   // calendar.update — only forward fields the model actually set (null means "unchanged").
@@ -399,7 +404,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       }
       const payload = { recipient, subject: generateSubjectFromBody(pending.body), body: pending.body };
       const execution = await actionExecutor({ user, provider: "google", action: "gmail.draft", payload,
-        target: { type: "gmail", id: null, label: null }, approval });
+        target: { type: "gmail", id: null, label: null }, approval, conversationId });
       if (execution.status !== "success") return { status: execution.status, action: "gmail.draft", selectedIdentity: pending.selectedIdentity };
       await persistDraftContext({ user, conversationId, action: "gmail.draft", result: execution.result, payload });
       await contextService.update({ userId: user._id, conversationId, pendingInteraction: null });
@@ -419,7 +424,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       if (!EMAIL.test(selected.email || "")) return { status: "rejected", reason: "selected_identity_has_no_email" };
       const selectedIdentity = { name: selected.displayName || selected.name || null, email: selected.email.toLowerCase() };
       const searchExecution = await actionExecutor({ user, provider: "google", action: "gmail.search",
-        payload: { query: `{from:${selectedIdentity.email} to:${selectedIdentity.email}}`, maxResults: 20 }, target: { type: "gmail", id: null, label: null }, approval });
+        payload: { query: `{from:${selectedIdentity.email} to:${selectedIdentity.email}}`, maxResults: 20 }, target: { type: "gmail", id: null, label: null }, approval, conversationId });
       if (searchExecution.status !== "success") return { status: searchExecution.status, action: pending.action };
       const conversationsByThread = new Map();
       for (const candidate of normalizedCandidates(searchExecution.result)) {
@@ -454,7 +459,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     }
     const payload = { messageId: selected.id, recipient: pending.selectedIdentity?.email || selected.email || null, subject: selected.subject || null, body: pending.body };
     const execution = await actionExecutor({ user, provider: "google", action: pending.action, payload,
-      target: { type: "gmail_message", id: selected.id }, approval });
+      target: { type: "gmail_message", id: selected.id }, approval, conversationId });
     const publicSelectedConversation = publicCandidate(selected, 0);
     if (execution.status !== "success") return { status: execution.status, action: pending.action, pendingAction: execution.pendingAction, selectedIdentity: pending.selectedIdentity, selectedConversation: publicSelectedConversation };
     await contextService.update({ userId: user._id, conversationId,
@@ -509,8 +514,8 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     }
     const trustedMessageId = selection.identity.id;
     const execution = await actionExecutor({ user, provider: "google", action: pending.action,
-      payload: { messageId: trustedMessageId, body: pending.body }, target: { type: "gmail_message", id: trustedMessageId }, approval });
-    if (execution.status !== "success") return { status: execution.status, action: pending.action };
+      payload: { messageId: trustedMessageId, body: pending.body }, target: { type: "gmail_message", id: trustedMessageId }, approval, conversationId });
+    if (execution.status !== "success") return { status: execution.status, action: pending.action, pendingAction: execution.pendingAction };
     await contextService.update({ userId: user._id, conversationId, pendingGmailReply: null });
     await persistDraftContext({ user, conversationId, action: pending.action, result: execution.result, payload: { body: pending.body, messageId: trustedMessageId }, candidate: selection.identity });
     return { status: "success", action: pending.action, result: safeResult(execution.result) };
@@ -559,8 +564,8 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     if (REPLY_ACTIONS.has(pending.action)) {
       const target = { type: "gmail_message", id: trustedMessageId };
       const payload = { messageId: trustedMessageId, body: pending.body };
-      const execution = await actionExecutor({ user, provider: "google", action: pending.action, payload, target, approval });
-      if (execution.status !== "success") return { status: execution.status, action: pending.action };
+      const execution = await actionExecutor({ user, provider: "google", action: pending.action, payload, target, approval, conversationId });
+      if (execution.status !== "success") return { status: execution.status, action: pending.action, pendingAction: execution.pendingAction };
       await persistDraftContext({ user, conversationId, action: pending.action, result: execution.result, payload, candidate: selection.identity });
       await persistTrustedTarget({ user, conversationId, candidate: selection.identity });
       return { status: "success", action: pending.action, result: safeResult(execution.result) };
@@ -628,7 +633,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     const target = CALENDAR_EVENT_ACTIONS.has(intent.action)
       ? { type: "calendar_event", id: intent.parameters.eventId }
       : { type: "calendar", id: null };
-    const execution = await actionExecutor({ user, provider: "google", action: intent.action, payload: calendarPayloadFor(intent), target, approval });
+    const execution = await actionExecutor({ user, provider: "google", action: intent.action, payload: calendarPayloadFor(intent), target, approval, conversationId });
     if (execution.status !== "success") return { status: execution.status, action: intent.action };
 
     if (intent.action === "calendar.search") {
@@ -691,7 +696,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       ? { draftId: draft.draftId, body: intent.parameters.body, replyToMessageId: draft.messageId, attachments: resolvedAttachments }
       : { draftId: draft.draftId, body: intent.parameters.body, recipient: draft.recipient, subject: draft.subject, threadId: draft.threadId, attachments: resolvedAttachments };
     const target = { type: "gmail_message", id: draft.draftId };
-    const execution = await actionExecutor({ user, provider: "google", action: "gmail.draft.update", payload, target, approval });
+    const execution = await actionExecutor({ user, provider: "google", action: "gmail.draft.update", payload, target, approval, conversationId });
     if (execution.status !== "success") return { status: execution.status, action: "gmail.draft.edit" };
     await contextService.update({ userId: user._id, conversationId, trustedDraft: { ...draft, body: intent.parameters.body, attachments: resolvedAttachments } }).catch(() => {});
     return { status: "success", action: "gmail.draft.edit", result: safeResult(execution.result) };

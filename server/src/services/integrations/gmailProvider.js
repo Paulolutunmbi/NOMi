@@ -106,8 +106,21 @@ const makeMime = ({ recipient, subject, body, reply, attachments = [] }) => {
   for (const att of attachments) {
     const filename = att.filename || "attachment";
     const mimeType = att.mimeType || "application/octet-stream";
-    const rawBuffer = Buffer.isBuffer(att.data) ? att.data
-      : (typeof att.data === "string" ? Buffer.from(att.data, "base64") : Buffer.from(att.buffer || ""));
+    // att.data is a Buffer when it comes straight from an upload, but once an
+    // attachment has round-tripped through a Mongo Mixed field (e.g. staged
+    // inside a PendingSendAction awaiting approval) the driver hands back a
+    // BSON Binary wrapper instead of a plain Buffer — its bytes live on
+    // `.buffer`/`.value()`, not on the wrapper itself. Falling through to
+    // `att.buffer` (which never exists on the attachment object) silently
+    // produced a 0-byte, unopenable attachment. Handle every shape here.
+    let rawBuffer;
+    if (Buffer.isBuffer(att.data)) rawBuffer = att.data;
+    else if (typeof att.data === "string") rawBuffer = Buffer.from(att.data, "base64");
+    else if (att.data && typeof att.data.value === "function") rawBuffer = Buffer.from(att.data.value());
+    else if (att.data && Buffer.isBuffer(att.data.buffer)) rawBuffer = att.data.buffer;
+    else if (att.data instanceof Uint8Array) rawBuffer = Buffer.from(att.data);
+    else if (att.data?.buffer instanceof ArrayBuffer) rawBuffer = Buffer.from(att.data.buffer);
+    else rawBuffer = Buffer.from(att.buffer || "");
     const base64Content = rawBuffer.toString("base64").replace(/(.{76})/g, "$1\r\n");
 
     parts.push(

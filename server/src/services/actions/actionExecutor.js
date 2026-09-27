@@ -31,13 +31,25 @@ const createActionExecutor = ({ check = checkPermission, save = savePersistentDe
   if (oneTimeGmailSend) {
     const recipient = String(payload.recipient || "").trim().toLowerCase();
     if (action === "gmail.send" && (!recipient || !/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(recipient))) return { status: "rejected", reason: "invalid_recipient" };
-    const boundPayload = { ...payload, recipient };
+    // Attachment binary data is stored in a Mongo Mixed field while the send
+    // awaits approval. A raw Buffer there round-trips through the driver as
+    // a BSON Binary wrapper rather than a plain Buffer, which silently
+    // corrupted attachments on approval. Base64-encoding here guarantees a
+    // lossless round trip regardless of driver/BSON behavior; gmailProvider
+    // already knows how to send a base64 string attachment.
+    const boundAttachments = Array.isArray(payload.attachments)
+      ? payload.attachments.map((att) => ({ ...att, data: Buffer.isBuffer(att.data) ? att.data.toString("base64") : att.data }))
+      : payload.attachments;
+    const boundPayload = { ...payload, recipient, ...(boundAttachments ? { attachments: boundAttachments } : {}) };
     const actionRecord = await pendingSendModel.create({ user: user._id, conversationId: conversationId || "", actionType: action, payload: boundPayload, status: "pending", expiresAt: new Date(now().getTime() + 10 * 60 * 1000) });
     return { status: "approval_required", provider, action, pendingAction: {
       id: String(actionRecord._id), action, recipient: recipient || "Existing Gmail conversation",
       subject: typeof boundPayload.subject === "string" ? boundPayload.subject : "",
       body: String(boundPayload.body || ""),
       preview: String(boundPayload.body || "").slice(0, 500), expiresAt: actionRecord.expiresAt,
+      attachmentsMeta: Array.isArray(boundAttachments)
+        ? boundAttachments.map((att) => ({ filename: att.filename, mimeType: att.mimeType, size: att.size }))
+        : [],
     } };
   }
 

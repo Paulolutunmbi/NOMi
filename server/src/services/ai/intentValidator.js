@@ -31,7 +31,11 @@ const ACTIONS = {
   "calendar.search": { required: [], allowed: ["query", "timeMin", "timeMax", "maxResults"] },
   "calendar.read": { required: ["eventId"], allowed: ["eventId"] },
   "calendar.freebusy": { required: ["timeMin", "timeMax"], allowed: ["timeMin", "timeMax"] },
-  "calendar.create": { required: ["summary", "startDateTime", "endDateTime"], allowed: ["summary", "description", "location", "startDateTime", "endDateTime", "timeZone", "attendees", "addMeet"] },
+  // endDateTime is intentionally not required: when the user never states an
+  // end time or duration, the orchestrator defaults it to one hour after
+  // startDateTime rather than looping the user through an unanswerable
+  // clarification about a detail they never intended to specify.
+  "calendar.create": { required: ["summary", "startDateTime"], allowed: ["summary", "description", "location", "startDateTime", "endDateTime", "timeZone", "attendees", "addMeet"] },
   "calendar.update": { required: ["eventId"], allowed: ["eventId", "summary", "description", "location", "startDateTime", "endDateTime", "timeZone", "attendees", "addMeet"] },
   "calendar.delete": { required: ["eventId"], allowed: ["eventId"] },
 };
@@ -114,7 +118,7 @@ const validateIntent = (intent, { trustedGmailMessageIds = [], trustedCalendarEv
       // Accepted without resolving it or exposing the authenticated address.
     } else if (EMAIL_PLACEHOLDER.test(recipient)) {
       if (!recipientPlaceholders.includes(recipient)) return { valid: false, reason: "untrusted_recipient_placeholder" };
-    } else if (EMAIL.test(recipient) && explicitRecipientEmails.length && recipient.toLowerCase() === explicitRecipientEmails[0]) {
+    } else if (EMAIL.test(recipient) && explicitRecipientEmails.includes(recipient.toLowerCase())) {
       // The planner may use exactly the address explicitly supplied this turn.
     } else if (EMAIL.test(recipient)) {
       return { valid: false, reason: explicitRecipientEmails.length ? "explicit_recipient_mismatch" : "untrusted_recipient_email" };
@@ -146,9 +150,12 @@ const validateIntent = (intent, { trustedGmailMessageIds = [], trustedCalendarEv
     for (const token of tokens) {
       // Same trust rule as Gmail's recipient field: a literal address is only
       // valid if it's an explicit privacy placeholder the user actually typed,
-      // or the self marker. The model may never invent an attendee address.
+      // it exactly matches an address the user typed in this turn's message
+      // (however they phrased the request around it), or it's the self
+      // marker. The model may never invent an attendee address.
       if (isSelfRecipientMarker(token)) continue;
       if (EMAIL_PLACEHOLDER.test(token)) { if (!recipientPlaceholders.includes(token)) return { valid: false, reason: "untrusted_recipient_placeholder" }; continue; }
+      if (EMAIL.test(token) && explicitRecipientEmails.includes(token.toLowerCase())) continue;
       if (EMAIL.test(token)) return { valid: false, reason: "untrusted_recipient_email" };
       return { valid: false, reason: "unresolved_recipient" };
     }

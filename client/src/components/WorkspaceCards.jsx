@@ -90,13 +90,14 @@ export function CalendarCandidates({ candidates, onSelect, disabled, title = 'Wh
   )
 }
 
-export function ApprovalCard({ action, pendingAction, onDecide, onEdit, disabled }) {
+export function ApprovalCard({ action, pendingAction, attachmentsMeta, onDecide, onEdit, disabled }) {
   const [recipient, setRecipient] = useState(pendingAction?.recipient || '')
   const [subject, setSubject] = useState(pendingAction?.subject || '')
   const [body, setBody] = useState(pendingAction?.body || pendingAction?.preview || '')
   const [saved, setSaved] = useState(true)
   const [saving, setSaving] = useState(false)
   const isSend = Boolean(pendingAction) || ['gmail.send', 'gmail.send.reply'].includes(action)
+  const attachments = pendingAction?.attachmentsMeta?.length ? pendingAction.attachmentsMeta : attachmentsMeta
   return (
     <div className="nomi-enter space-y-3 rounded-2xl border border-nomi-orange/40 bg-nomi-orange-tint p-4">
       <div>
@@ -108,6 +109,15 @@ export function ApprovalCard({ action, pendingAction, onDecide, onEdit, disabled
           <label className="block">To<input className="mt-1 w-full rounded border border-line bg-surface px-2 py-1 text-ink" value={recipient} disabled={disabled || saving} onChange={(e) => { setRecipient(e.target.value); setSaved(false) }} /></label>
           <label className="block">Subject<input className="mt-1 w-full rounded border border-line bg-surface px-2 py-1 text-ink" value={subject} disabled={disabled || saving} onChange={(e) => { setSubject(e.target.value); setSaved(false) }} /></label>
           <label className="block">Message<textarea className="mt-1 min-h-32 w-full rounded border border-line bg-surface px-2 py-1 text-ink" value={body} disabled={disabled || saving} onChange={(e) => { setBody(e.target.value); setSaved(false) }} /></label>
+          {attachments?.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 border-t border-line pt-2">
+              {attachments.map((a, i) => (
+                <span key={i} className="inline-flex items-center gap-1 rounded-lg border border-line bg-surface-muted px-2 py-1 text-xs text-ink-soft">
+                  📎 {a.filename}{typeof a.size === 'number' ? ` · ${Math.round(a.size / 1024)}KB` : ''}
+                </span>
+              ))}
+            </div>
+          )}
           {!saved && <button type="button" disabled={disabled || saving} className="rounded border border-line px-3 py-1.5 text-ink disabled:opacity-60" onClick={async () => { setSaving(true); try { await onEdit(pendingAction.id, { recipient, subject, body }); setSaved(true) } finally { setSaving(false) } }}>{saving ? 'Saving…' : 'Save draft changes'}</button>}
         </div>}
       </div>
