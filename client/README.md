@@ -1,16 +1,56 @@
-# React + Vite
+# NOMI — client
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+The React chat UI for NOMI: the conversation view, approval cards for
+send/draft/calendar actions, identity/conversation disambiguation, settings,
+and the PWA install experience.
 
-Currently, two official plugins are available:
+See the [project root README](../README.md) for the full setup (server,
+Google OAuth, environment variables) — this file covers the client only.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Stack
 
-## React Compiler
+React 19, Vite, React Router, Tailwind CSS, Firebase (sign-in only — Gmail
+and Calendar access is a separate backend-owned OAuth connection, not
+Firebase).
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Setup
 
-## Expanding the ESLint configuration
+```bash
+npm install
+cp .env.example .env   # fill in VITE_FIREBASE_* and VITE_API_BASE_URL
+npm run dev
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Runs at `http://localhost:5173` by default and expects the server (see
+`../server/`) running at `VITE_API_BASE_URL` (defaults to
+`http://localhost:5000`).
+
+## Scripts
+
+- `npm run dev` — start the Vite dev server with HMR
+- `npm run build` — production build to `dist/`
+- `npm run preview` — serve the production build locally
+- `npm run lint` — run ESLint
+
+## Structure
+
+```
+src/
+├── components/   Chat UI, approval/candidate cards, AppShell (single sidebar), InstallBanner
+├── context/      Auth, theme, and the shared chat-sidebar state
+├── hooks/        useNomiConversation — drives the chat/action loop against the server
+├── pages/        Workspace (chat), Settings
+└── api/          Server API client
+public/
+├── manifest.webmanifest, sw.js, icon-*.png   PWA manifest, service worker, icons
+```
+
+## Progressive Web App
+
+`public/manifest.webmanifest` and `public/sw.js` make the app installable.
+The service worker only caches the static app shell — it explicitly never
+intercepts `/api/` requests, so signed-in data is never served stale or
+from cache. `InstallBanner.jsx` shows Chrome/Android's native install
+prompt, or manual "Add to Home Screen" steps on iOS (which has no
+programmatic install prompt). Registration is skipped in dev (`npm run dev`)
+so it doesn't shadow Vite's HMR, and only runs against a production build.
