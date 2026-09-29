@@ -1485,6 +1485,105 @@ test("calendar.update/delete succeed against a server-trusted eventId", async ()
   assert.equal(calls[0].target.type, "calendar_event");
 });
 
+test("rescheduling with only a new start time keeps the meeting's original length", async () => {
+  const record = {
+    gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-1"], calendarCandidates: [],
+    trustedCalendarEvent: { id: "evt-1", summary: "Sync", start: "2026-09-30T10:00:00+01:00", end: "2026-09-30T10:30:00+01:00" },
+  };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async (input) => { calls.push(input); return { status: "success", result: { event: { id: "evt-1", summary: "Sync" } } }; },
+  });
+  const result = await orchestrator.execute({
+    user: { ...user, timeZone: "Africa/Lagos" }, conversationId: "c", message: "move it to 2pm",
+    proposal: { action: "calendar.update", parameters: params({ eventId: "evt-1", startDateTime: "2026-09-30T14:00:00Z" }) },
+  });
+  assert.equal(result.status, "success");
+  assert.equal(calls[0].payload.startDateTime, "2026-09-30T14:00:00");
+  // Original meeting was 30 minutes long — that length carries over to the new time.
+  assert.equal(calls[0].payload.endDateTime, "2026-09-30T14:30:00");
+  assert.equal(calls[0].payload.timeZone, "Africa/Lagos");
+});
+
+test("rescheduling with no prior trusted duration to preserve still updates the start, leaving the end untouched", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-1"], calendarCandidates: [], trustedCalendarEvent: { id: "evt-1", summary: "Sync" } };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async (input) => { calls.push(input); return { status: "success", result: { event: { id: "evt-1" } } }; },
+  });
+  const result = await orchestrator.execute({
+    user, conversationId: "c", message: "move it to 2pm",
+    proposal: { action: "calendar.update", parameters: params({ eventId: "evt-1", startDateTime: "2026-09-30T14:00:00Z" }) },
+  });
+  assert.equal(result.status, "success");
+  assert.equal(calls[0].payload.startDateTime, "2026-09-30T14:00:00");
+  assert.equal(calls[0].payload.endDateTime, undefined);
+});
+
+test("changing only the end time (extending a meeting) still gets a time zone attached", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-1"], calendarCandidates: [], trustedCalendarEvent: { id: "evt-1", summary: "Sync" } };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async (input) => { calls.push(input); return { status: "success", result: { event: { id: "evt-1" } } }; },
+  });
+  const result = await orchestrator.execute({
+    user: { ...user, timeZone: "Africa/Nairobi" }, conversationId: "c", message: "run it 30 minutes longer",
+    proposal: { action: "calendar.update", parameters: params({ eventId: "evt-1", endDateTime: "2026-09-30T15:00:00Z" }) },
+  });
+  assert.equal(result.status, "success");
+  assert.equal(calls[0].payload.startDateTime, undefined);
+  assert.equal(calls[0].payload.endDateTime, "2026-09-30T15:00:00");
+  assert.equal(calls[0].payload.timeZone, "Africa/Nairobi");
+});
+
+test("adding two more people to an already-created meeting merges with the existing attendee, keyed off the trusted event", async () => {
+  const record = {
+    gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-1"], calendarCandidates: [],
+    trustedCalendarEvent: { id: "evt-1", summary: "Sync" },
+  };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async (input) => { calls.push(input); return { status: "success", result: { event: { id: "evt-1", attendees: [{ email: "paul@example.com" }, { email: "jane@example.com" }, { email: "sam@example.com" }] } } }; },
+  });
+  const result = await orchestrator.execute({
+    user, conversationId: "c", message: "add jane@example.com and sam@example.com to the meeting",
+    proposal: { action: "calendar.update", parameters: params({ eventId: "evt-1", attendees: "jane@example.com,sam@example.com" }) },
+  });
+  assert.equal(result.status, "success");
+  assert.equal(calls[0].payload.attendees, "jane@example.com, sam@example.com");
+  assert.equal(result.result.event.attendees.length, 3);
+});
+
+test("multiple attendees at creation time are all trusted when each address is actually typed in the message", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [] };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({
+    contextService: conversationService(record),
+    actionExecutor: async (input) => { calls.push(input); return { status: "success", result: { event: { id: "evt-1", attendees: [{ email: "jane@example.com" }, { email: "sam@example.com" }] } } }; },
+  });
+  const result = await orchestrator.execute({
+    user: { ...user, timeZone: "Africa/Lagos" }, conversationId: "c", message: "create a meeting with jane@example.com and sam@example.com tomorrow at 10am",
+    proposal: { action: "calendar.create", parameters: params({ summary: "Meeting", startDateTime: "2026-09-30T10:00:00Z", endDateTime: null, attendees: "jane@example.com,sam@example.com", addMeet: true }) },
+  });
+  assert.equal(result.status, "success");
+  assert.equal(calls[0].payload.attendees, "jane@example.com, sam@example.com");
+});
+
+test("a defaulted time zone note includes the user's own country label; an explicit one does not", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [] };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async () => calendarEventResult });
+  const defaulted = await orchestrator.execute({ user: { ...user, timeZone: "Africa/Lagos", country: "Nigeria" }, conversationId: "c", message: "create a meeting with paul@example.com tomorrow by 10 am", proposal: meetingProposal() });
+  assert.equal(defaulted.result.timeZoneDefaulted, true);
+  assert.equal(defaulted.result.timeZoneCountry, "Nigeria");
+  const stated = await orchestrator.execute({ user: { ...user, timeZone: "Africa/Lagos", country: "Nigeria" }, conversationId: "c", message: "create a meeting with paul@example.com tomorrow at 10 am WAT", proposal: meetingProposal() });
+  assert.equal(stated.result.timeZoneDefaulted, false);
+  assert.equal(stated.result.timeZoneCountry, null);
+});
+
 test("calendar.create only accepts an attendee address the user actually typed, never one invented by the model", async () => {
   const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [], userTimeZone: "UTC" };
   const calls = [];
@@ -1843,40 +1942,4 @@ test("gmail_select:N still requires gmail.read permission approval, just like an
   const result = await orchestrator.execute({ user, conversationId: "c", message: "gmail_select:1" });
   assert.equal(result.status, "approval_required");
   assert.equal(result.action, "gmail.read");
-});
-
-test("the confirmation note names the user's country time zone and lists every attendee", async () => {
-  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [] };
-  const two = { status: "success", result: { event: { id: "evt-1", summary: "Meeting", attendees: [{ email: "a@gmail.com" }, { email: "b@gmail.com" }] } } };
-  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async () => two });
-  const result = await orchestrator.execute({ user: { ...user, country: "nigeria", timeZone: "Africa/Lagos" }, conversationId: "c", message: "create a meeting with a@gmail.com and b@gmail.com tomorrow by 10 am", proposal: { action: "calendar.create", parameters: params({ summary: "Meeting", startDateTime: "2026-09-29T10:00:00Z", attendees: "a@gmail.com, b@gmail.com" }) } });
-  assert.equal(result.result.timeZoneNote, "Event set to Nigeria time with a@gmail.com, b@gmail.com");
-});
-
-test("a stated zone is named as that zone, not as the user's country", async () => {
-  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [] };
-  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async () => calendarEventResult });
-  const result = await orchestrator.execute({ user: { ...user, country: "Kenya", timeZone: "Africa/Nairobi" }, conversationId: "c", message: "create a meeting with paul@example.com tomorrow at 10 am WAT", proposal: meetingProposal() });
-  assert.match(result.result.timeZoneNote, /^Event set to Lagos \(UTC\+1\) with paul@example\.com$/);
-});
-
-test("rescheduling a trusted event applies the user's zone and leaves the end to the provider", async () => {
-  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-1"], calendarCandidates: [], trustedCalendarEvent: { id: "evt-1" } };
-  const calls = [];
-  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async (input) => { calls.push(input); return calendarEventResult; } });
-  const result = await orchestrator.execute({ user: { ...user, country: "Nigeria", timeZone: "Africa/Lagos" }, conversationId: "c", message: "move it to 3pm", proposal: { action: "calendar.update", parameters: params({ eventId: "evt-1", startDateTime: "2026-09-30T15:00:00Z" }) } });
-  assert.equal(result.status, "success");
-  assert.equal(calls[0].payload.startDateTime, "2026-09-30T15:00:00");
-  assert.equal(calls[0].payload.timeZone, "Africa/Lagos");
-  assert.equal("endDateTime" in calls[0].payload, false);
-  assert.match(result.result.timeZoneNote, /^Event set to Nigeria time/);
-});
-
-test("changing only the end time still carries the time zone", async () => {
-  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-1"], calendarCandidates: [], trustedCalendarEvent: { id: "evt-1" } };
-  const calls = [];
-  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async (input) => { calls.push(input); return calendarEventResult; } });
-  await orchestrator.execute({ user: { ...user, timeZone: "Africa/Lagos" }, conversationId: "c", message: "end it at 5pm", proposal: { action: "calendar.update", parameters: params({ eventId: "evt-1", endDateTime: "2026-09-29T17:00:00Z" }) } });
-  assert.equal(calls[0].payload.endDateTime, "2026-09-29T17:00:00");
-  assert.equal(calls[0].payload.timeZone, "Africa/Lagos");
 });

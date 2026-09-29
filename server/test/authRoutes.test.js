@@ -82,15 +82,3 @@ test("a multi-time-zone country still gets one usable default instead of a rejec
   assert.equal(patched.user.country, "United States");
   assert.ok(patched.user.timeZone.startsWith("America/"));
 });
-
-test("POST /country/check needs no sign-in and tells a real country from a typo", async (t) => {
-  const { app } = makeApp();
-  const { server, base } = listen(app);
-  t.after(() => server.close());
-  const post = (country) => fetch(`${base()}/country/check`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ country }) });
-  const ok = await post("Nigeria");
-  assert.equal(ok.status, 200);
-  assert.equal((await ok.json()).timeZone, "Africa/Lagos");
-  assert.equal((await post("Nigria")).status, 400);
-  assert.equal((await post("")).status, 400);
-});

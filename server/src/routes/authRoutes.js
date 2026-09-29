@@ -58,22 +58,6 @@ const createAuthRouter = ({
   });
 
   /**
-   * POST /api/auth/country/check
-   * Public (used on the sign-up form before an account exists): says
-   * whether NOMI can turn what was typed into a time zone, so a typo is
-   * caught up front instead of silently falling back to a default zone.
-   */
-  router.post("/country/check", (req, res) => {
-    const { country } = req.body || {};
-    const trimmed = typeof country === "string" ? country.trim().slice(0, 80) : "";
-    const timeZone = trimmed ? defaultTimeZoneForCountry(trimmed) : null;
-    if (!timeZone) {
-      return res.status(400).json({ success: false, error: { code: "COUNTRY_NOT_RECOGNIZED", message: "NOMI doesn't recognize that country. Try the full country name." } });
-    }
-    return res.status(200).json({ success: true, timeZone });
-  });
-
-  /**
    * PATCH /api/auth/me/country
    * Sets or changes the country used to default this user's calendar
    * events (and, going forward, their mail time zone). Available from

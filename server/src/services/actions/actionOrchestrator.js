@@ -3,7 +3,7 @@ const { resolveIdentity } = require("../identity/identityResolver");
 const { isSelfRecipientMarker, generateSubjectFromBody } = require("../ai/intentValidator");
 const { getAttachmentsForUser, removeAttachments } = require("../attachments/attachmentService");
 const { checkEmailDomain: checkEmailDomainDefault } = require("../validation/emailDomainCheck");
-const { timeZoneFromText, describeTimeZone, stripOffset, addHoursWallClock } = require("../calendar/timeZoneResolver");
+const { timeZoneFromText, describeTimeZone, stripOffset, addHoursWallClock, addMillisWallClock } = require("../calendar/timeZoneResolver");
 
 const REPLY_ACTIONS = new Set(["gmail.draft.reply", "gmail.send.reply"]);
 const DRAFT_ACTIONS = new Set(["gmail.draft", "gmail.draft.reply"]);
@@ -283,16 +283,6 @@ const replyActionFor = (compoundAction) => {
 
 // Fallback when a user has no country set yet in their profile.
 const DEFAULT_TIME_ZONE = "Africa/Lagos";
-
-// "Nigeria time" when the zone is the one from the user's own country,
-// otherwise the zone's own name, e.g. "Nairobi (EAT, UTC+3)".
-const titleCase = (value) => String(value || "").trim().replace(/\b([a-z])/g, (m) => m.toUpperCase());
-const timeZoneNoteFor = ({ timeZone, user, stated, attendees }) => {
-  const usesOwnCountry = !stated && user?.country && user?.timeZone && user.timeZone === timeZone;
-  const place = usesOwnCountry ? `${titleCase(user.country)} time` : describeTimeZone(timeZone);
-  const emails = (Array.isArray(attendees) ? attendees : []).map((entry) => entry?.email).filter(Boolean);
-  return `Event set to ${place}${emails.length ? ` with ${emails.join(", ")}` : ""}`;
-};
 
 const createActionOrchestrator = ({ contextService, actionExecutor = executeAction, resolve = resolveIdentity, checkEmailDomain = checkEmailDomainDefault } = {}) => {
   if (!contextService) throw new Error("contextService is required");
@@ -653,17 +643,26 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     // one, or a country, to change it.
     let chosenTimeZone = null;
     let timeZoneDefaulted = false;
-    let timeZoneStated = false;
-    const timeIsChanging = intent.action === "calendar.update" && Boolean(intent.parameters.startDateTime || intent.parameters.endDateTime);
-    if (intent.action === "calendar.create" || timeIsChanging) {
+    const reschedulingTime = intent.action === "calendar.update" && (intent.parameters.startDateTime || intent.parameters.endDateTime);
+    if (intent.action === "calendar.create" || reschedulingTime) {
       const stated = timeZoneFromText(message);
       chosenTimeZone = stated || user.timeZone || DEFAULT_TIME_ZONE;
       timeZoneDefaulted = !stated;
       const p = intent.parameters;
       if (p.startDateTime) p.startDateTime = stripOffset(p.startDateTime);
-      // On create a missing end defaults to +1h. On update a missing end is
-      // left null so the provider keeps the meeting's existing length.
-      p.endDateTime = p.endDateTime ? stripOffset(p.endDateTime) : (intent.action === "calendar.create" ? (addHoursWallClock(p.startDateTime, 1) || null) : null);
+      if (p.endDateTime) {
+        p.endDateTime = stripOffset(p.endDateTime);
+      } else if (intent.action === "calendar.create") {
+        p.endDateTime = addHoursWallClock(p.startDateTime, 1) || null;
+      } else if (p.startDateTime) {
+        // Rescheduling with only a new start time: keep the meeting's
+        // original length instead of leaving Google's old absolute end time
+        // in place, which would otherwise shrink, stretch, or even land
+        // before the new start.
+        const original = activeConversation.trustedCalendarEvent;
+        const durationMs = original?.start && original?.end ? new Date(original.end).getTime() - new Date(original.start).getTime() : NaN;
+        p.endDateTime = Number.isFinite(durationMs) && durationMs > 0 ? addMillisWallClock(p.startDateTime, durationMs) : null;
+      }
       p.timeZone = chosenTimeZone;
     }
     const target = CALENDAR_EVENT_ACTIONS.has(intent.action)
@@ -711,10 +710,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       const remainingIds = (activeConversation.calendarEventIds || []).filter((id) => id !== intent.parameters.eventId);
       await contextService.update({ userId: user._id, conversationId, calendarEventIds: remainingIds, calendarCandidates: remainingCandidates, trustedCalendarEvent: null }).catch(() => {});
     }
-    return { status: "success", action: intent.action, result: { ...safeResult(execution.result), ...(chosenTimeZone ? {
-      timeZone: chosenTimeZone, timeZoneLabel: describeTimeZone(chosenTimeZone), timeZoneDefaulted,
-      timeZoneNote: timeZoneNoteFor({ timeZone: chosenTimeZone, user, stated: !timeZoneDefaulted, attendees: execution.result?.event?.attendees }),
-    } : {}) } };
+    return { status: "success", action: intent.action, result: { ...safeResult(execution.result), ...(chosenTimeZone ? { timeZone: chosenTimeZone, timeZoneLabel: describeTimeZone(chosenTimeZone), timeZoneDefaulted, timeZoneCountry: timeZoneDefaulted ? (user.country || null) : null } : {}) } };
   };
 
   // Content-only revision of the currently trusted draft ("make it more

@@ -151,25 +151,21 @@ export function ApprovalCard({ action, pendingAction, attachmentsMeta, onDecide,
   )
 }
 
-// Google returns "2026-09-29T10:00:00+01:00". The clock part is already the
-// time in the event's own zone, so it is shown as-is (never converted to the
-// browser's zone, which is how 10:00 could appear as 11:00).
-function formatEventTime(value) {
-  const m = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/)
-  if (!m) return String(value || '')
-  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]))
-  return new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }).format(d)
-}
-
-function EventCard({ event, timeZoneLabel, timeZoneDefaulted, timeZoneNote }) {
-  const attendees = Array.isArray(event.attendees) ? event.attendees.filter((a) => a?.email) : []
+function EventCard({ event, timeZoneLabel, timeZoneDefaulted, timeZoneCountry }) {
+  const attendeeEmails = Array.isArray(event.attendees) ? event.attendees.map((a) => a.email).filter(Boolean) : []
+  // "Set to Nigeria time (Lagos, WAT, UTC+1) with jane@example.com, sam@example.com."
+  const zonePhrase = timeZoneLabel ? (timeZoneCountry ? `${timeZoneCountry} time (${timeZoneLabel})` : timeZoneLabel) : ''
+  const noteParts = []
+  if (zonePhrase) noteParts.push(`Set to ${zonePhrase}`)
+  if (attendeeEmails.length) noteParts.push(`with ${attendeeEmails.join(', ')}`)
+  const note = noteParts.length ? `${noteParts.join(' ')}.` : ''
   return (
     <div className="rounded-xl border border-line bg-surface p-3.5">
       <p className="text-sm font-semibold text-ink">{event.summary || 'Untitled event'}</p>
-      <p className="mt-0.5 text-xs text-ink-faint">{[event.start, event.end].filter(Boolean).map(formatEventTime).join(' – ')}{timeZoneLabel ? ` · ${timeZoneLabel}` : ''}</p>
-      {timeZoneNote && (
+      <p className="mt-0.5 text-xs text-ink-faint">{[event.start, event.end].filter(Boolean).join(' – ')}{timeZoneLabel ? ` · ${timeZoneLabel}` : ''}</p>
+      {note && (
         <p className="mt-1.5 text-xs text-ink-faint">
-          {timeZoneNote}.{timeZoneDefaulted ? ' Tell NOMI a different time zone or country to change it.' : ''}
+          {note}{timeZoneDefaulted ? ' Tell NOMI a different time zone or country to change it.' : ''}
         </p>
       )}
       {event.location && <p className="mt-1 text-xs text-ink-faint">{event.location}</p>}
@@ -177,14 +173,6 @@ function EventCard({ event, timeZoneLabel, timeZoneDefaulted, timeZoneNote }) {
         <a href={event.meetLink} target="_blank" rel="noreferrer" className="mt-2 inline-block text-xs font-medium text-nomi-orange hover:text-nomi-orange-dark">
           Join Google Meet
         </a>
-      )}
-      {attendees.length > 0 && (
-        <div className="mt-2 text-xs text-ink-faint">
-          <p>{attendees.length} attendee{attendees.length === 1 ? '' : 's'}</p>
-          <ul className="mt-0.5 space-y-0.5">
-            {attendees.map((attendee) => <li key={attendee.email} className="break-all">{attendee.email}</li>)}
-          </ul>
-        </div>
       )}
     </div>
   )
@@ -308,7 +296,7 @@ export function SuccessCard({ action, result, attachmentsMeta, selectedIdentity,
         <p className="text-sm font-medium text-ink">
           {action === 'calendar.create' ? 'Event created' : action === 'calendar.update' ? 'Event updated' : 'Event details'}
         </p>
-        <EventCard event={result.event} timeZoneLabel={result.timeZoneLabel} timeZoneDefaulted={result.timeZoneDefaulted} timeZoneNote={result.timeZoneNote} />
+        <EventCard event={result.event} timeZoneLabel={result.timeZoneLabel} timeZoneDefaulted={result.timeZoneDefaulted} timeZoneCountry={result.timeZoneCountry} />
       </div>
     )
   }

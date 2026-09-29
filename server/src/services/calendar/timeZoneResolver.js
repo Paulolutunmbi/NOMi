@@ -153,12 +153,16 @@ const timeZoneFromText = (message) => {
 // number the user asked for ("10") is kept, and the chosen zone is attached.
 const stripOffset = (value) => String(value || "").trim().replace(/(Z|[+-]\d{2}:\d{2})$/i, "").replace(/\.\d+$/, "").replace(/T(\d{2}:\d{2})$/, "T$1:00");
 const pad = (n) => String(n).padStart(2, "0");
-const addHoursWallClock = (wallClock, hours) => {
+// Adds a duration to a wall-clock string, treating the digits as plain
+// numbers (no real time zone involved) so a meeting's length is preserved
+// exactly regardless of which zone it's actually booked in.
+const addMillisWallClock = (wallClock, ms) => {
   const m = String(wallClock).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
   if (!m) return null;
-  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)) + hours * 3600 * 1000);
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)) + ms);
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
 };
+const addHoursWallClock = (wallClock, hours) => addMillisWallClock(wallClock, hours * 3600 * 1000);
 
 // "Tue 29 Sep, 10:00" for the confirmation card, from the wall-clock string.
 const formatWallClock = (wallClock) => {
@@ -178,4 +182,5 @@ const defaultTimeZoneForCountry = (input) => {
 };
 
 module.exports = {
+  addMillisWallClock,
   defaultTimeZoneForCountry, COMMON_ZONES, isValidTimeZone, resolveTimeZone, timeZoneFromText, describeTimeZone, optionFor, stripOffset, addHoursWallClock, formatWallClock };

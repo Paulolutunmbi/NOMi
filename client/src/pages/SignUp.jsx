@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import AuthCard, { AuthDivider, AuthError, AuthField, GoogleButton } from '../components/AuthCard'
 import { friendlyAuthError, registerWithEmailAndPassword, signInWithGoogle } from '../services/auth'
-import { isCountryRecognized, updateCountry } from '../api/nomiClient'
+import { updateCountry } from '../api/nomiClient'
 
 export default function SignUp() {
   const navigate = useNavigate()
@@ -33,13 +33,6 @@ export default function SignUp() {
 
     setIsSubmitting(true)
     try {
-      // Catch a mistyped country now: it decides the time zone of every
-      // event NOMI creates, so it shouldn't silently fall back to a default.
-      if (!(await isCountryRecognized(country.trim()))) {
-        setError("NOMI doesn't recognize that country. Try the full name, e.g. \"Nigeria\".")
-        setIsSubmitting(false)
-        return
-      }
       await registerWithEmailAndPassword(email.trim(), password, name.trim())
       // Best-effort: this sets the default time zone for calendar events.
       // If it fails, Onboarding asks again before the workspace opens.

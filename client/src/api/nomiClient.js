@@ -177,23 +177,6 @@ export function updateCountry(country) {
   return request('/api/auth/me/country', { method: 'PATCH', body: { country } })
 }
 
-// Public check used on the sign-up form, before there is a token: is this a
-// country NOMI can map to a time zone? Resolves true/false; a network failure
-// resolves true so an outage never blocks sign-up (Onboarding asks again).
-export async function isCountryRecognized(country) {
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/auth/country/check`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ country }),
-    })
-    if (response.status === 400) return false
-    return true
-  } catch {
-    return true
-  }
-}
-
 export function logoutNomi() {
   return request('/api/auth/logout', { method: 'POST' })
 }
