@@ -130,6 +130,11 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
         // outage or rate limit look like a mystery "server error".
         console.warn(`[AI DEBUG] intent planning did not produce a proposal: status=${planned.status} reason=${planned.reason || "unknown"} provider=${planned.provider || "none"}`);
       }
+      if (planned.status === "provider_error" && planned.reason === "ai_provider_rate_limited") {
+        // A busy AI provider is not a server bug: 429 lets the app show
+        // "NOMI is handling a lot right now" instead of a generic failure.
+        return fail(res, 429, "AI_RATE_LIMITED", "NOMI is handling a lot right now. Try again in a moment.");
+      }
       if (planned.status !== "proposed") return fail(res, planned.status === "invalid" ? 422 : 503, planned.status === "invalid" ? "AI_INTENT_INVALID" : "AI_PROVIDER_ERROR", "The request could not be safely executed.");
       const intent = restorePlaceholders(planned.intent, safe.mappings);
       // Keep an explicitly typed recipient deterministic. The planner can

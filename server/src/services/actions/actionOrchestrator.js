@@ -904,17 +904,23 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     await contextService.update({ userId: user._id, conversationId, gmailMessageIds: updatedIds, gmailCandidates: updatedCandidates, retrievedContext });
   };
 
-  // Best-effort side effect of actually opening a message, mirroring a
-  // normal email client. This never blocks or changes the gmail.read result:
-  // if gmail.markRead isn't already a granted permission, actionExecutor
-  // just returns "approval_required" and we do nothing — a read should never
-  // surface an unrelated permission prompt for a side effect the user didn't
-  // directly ask about, and a failure here should never surface as a read error.
+  // Opening a message is the user explicitly choosing to read it, so marking it
+  // read (like any mail client) is covered by that same action. It is passed as
+  // a one-time approval so it works without a separate permission prompt —
+  // previously it silently did nothing unless the user had already granted
+  // gmail.markRead permanently, which new users never had. An explicit "deny"
+  // for gmail.markRead is still honoured by actionExecutor. Failure never
+  // affects the read result; it is logged and reported as false.
   const autoMarkMessageRead = async ({ user, conversationId, messageId }) => {
-    if (!messageId) return;
+    if (!messageId) return false;
     try {
-      await actionExecutor({ user, provider: "google", action: "gmail.markRead", payload: { messageIds: [messageId] }, target: { type: "gmail_message", id: null }, conversationId });
-    } catch { /* best-effort only */ }
+      const outcome = await actionExecutor({ user, provider: "google", action: "gmail.markRead", payload: { messageIds: [messageId] }, target: { type: "gmail_message", id: null }, approval: "allow_once", conversationId });
+      if (outcome.status !== "success") console.warn(`[NOMI] auto mark-as-read skipped: status=${outcome.status}`);
+      return outcome.status === "success";
+    } catch (error) {
+      console.warn(`[NOMI] auto mark-as-read failed: code=${error?.code || "unknown"}`);
+      return false;
+    }
   };
 
   const execute = async ({ user, conversationId, message, proposal, conversation, approval, attachmentIds }) => {
@@ -953,8 +959,8 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       const execution = await actionExecutor({ user, provider: "google", action: "gmail.read", payload: { messageId: id }, target: { type: "gmail_message", id }, approval, conversationId });
       if (execution.status !== "success") return { status: execution.status, action: "gmail.read", pendingAction: execution.pendingAction };
       if (execution.result?.message) await persistReadMessageContext({ user, conversationId, activeConversation, message: execution.result.message });
-      await autoMarkMessageRead({ user, conversationId, messageId: id });
-      return { status: "success", action: "gmail.read", result: safeResult(execution.result) };
+      const markedRead = await autoMarkMessageRead({ user, conversationId, messageId: id });
+      return { status: "success", action: "gmail.read", result: { ...safeResult(execution.result), markedRead } };
     }
 
     const interactionOutcome = await executePendingInteraction({ user, conversationId, message, conversation: activeConversation, approval });

@@ -173,8 +173,8 @@ export function fetchMe() {
 
 // Sets or changes the country NOMI uses to default this user's calendar
 // events to a time zone (and, going forward, their mail time zone too).
-export function updateCountry(country) {
-  return request('/api/auth/me/country', { method: 'PATCH', body: { country } })
+export function updateCountry(country, timeZone) {
+  return request('/api/auth/me/country', { method: 'PATCH', body: { country, ...(timeZone ? { timeZone } : {}) } })
 }
 
 export function logoutNomi() {

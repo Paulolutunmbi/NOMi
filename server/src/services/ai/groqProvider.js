@@ -55,19 +55,32 @@ const normalizeGroqError = (error) => {
 
 const createGroqProvider = ({ config = getAIConfig(), client } = {}) => {
   const settings = validateAIConfig(config);
-  const groq = client || new Groq({ apiKey: settings.groqApiKey, timeout: 15000, maxRetries: 0 });
+  const groq = client || new Groq({ apiKey: settings.groqApiKey, timeout: 15000, maxRetries: 2 });
   return {
     async generateIntent(prompt) {
+      const request = (model) => groq.chat.completions.create({
+        model,
+        temperature: 0,
+        messages: [
+          { role: "system", content: prompt.system },
+          { role: "user", content: JSON.stringify({ userRequest: prompt.userRequest, untrustedRetrievedContent: prompt.untrustedRetrievedContent, trustedConversationContext: prompt.trustedConversationContext }) },
+        ],
+        response_format: { type: "json_schema", json_schema: INTENT_SCHEMA },
+      });
       try {
-        const completion = await groq.chat.completions.create({
-          model: settings.groqModel,
-          temperature: 0,
-          messages: [
-            { role: "system", content: prompt.system },
-            { role: "user", content: JSON.stringify({ userRequest: prompt.userRequest, untrustedRetrievedContent: prompt.untrustedRetrievedContent, trustedConversationContext: prompt.trustedConversationContext }) },
-          ],
-          response_format: { type: "json_schema", json_schema: INTENT_SCHEMA },
-        });
+        let completion;
+        try {
+          completion = await request(settings.groqModel);
+        } catch (error) {
+          // 429 on the primary model: try the fallback model once. Each model
+          // has its own rate-limit bucket, so this usually succeeds. (The SDK
+          // has already retried the primary with backoff before we get here.)
+          const fallback = settings.groqFallbackModel;
+          if (error.status === 429 && fallback && fallback !== settings.groqModel) {
+            console.warn(`[AI DEBUG] ${settings.groqModel} rate limited; retrying with ${fallback}`);
+            completion = await request(fallback);
+          } else throw error;
+        }
         const content = completion?.choices?.[0]?.message?.content;
         if (typeof content !== "string") throw providerError("ai_provider_structured_output_failed");
         try { return JSON.parse(content); } catch { throw providerError("ai_provider_structured_output_failed"); }

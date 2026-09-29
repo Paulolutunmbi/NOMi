@@ -2,7 +2,7 @@ const express = require("express");
 const defaultAdmin = require("../config/firebase");
 const { findOrCreateFromFirebaseClaims } = require("../services/users/userService");
 const ConnectedAccount = require("../models/ConnectedAccount");
-const { defaultTimeZoneForCountry } = require("../services/calendar/timeZoneResolver");
+const { defaultTimeZoneForCountry, isValidTimeZone } = require("../services/calendar/timeZoneResolver");
 
 // The fallback for anyone who has not set a country yet, so a calendar event
 // still lands somewhere sane instead of drifting to the server's UTC clock.
@@ -64,12 +64,14 @@ const createAuthRouter = ({
    * Settings at any time, not just at sign-up.
    */
   router.patch("/me/country", requireAuth, async (req, res, next) => {
-    const { country } = req.body || {};
+    const { country, timeZone: requestedTimeZone } = req.body || {};
     const trimmed = typeof country === "string" ? country.trim().slice(0, 80) : "";
     if (!trimmed) {
       return res.status(400).json({ success: false, error: { code: "COUNTRY_REQUIRED", message: "Enter a country." } });
     }
-    const timeZone = defaultTimeZoneForCountry(trimmed);
+    // The country/time-zone pickers send an explicit IANA zone. Trust it only
+    // if it is a real zone; otherwise fall back to resolving from the name.
+    const timeZone = isValidTimeZone(requestedTimeZone) ? requestedTimeZone : defaultTimeZoneForCountry(trimmed);
     if (!timeZone) {
       return res.status(400).json({ success: false, error: { code: "COUNTRY_NOT_RECOGNIZED", message: "NOMI doesn't recognize that country. Try the full country name." } });
     }

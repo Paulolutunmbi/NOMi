@@ -82,3 +82,21 @@ test("a multi-time-zone country still gets one usable default instead of a rejec
   assert.equal(patched.user.country, "United States");
   assert.ok(patched.user.timeZone.startsWith("America/"));
 });
+
+test("PATCH /me/country stores the explicit time zone picked for a multi-zone country", async (t) => {
+  const { app } = makeApp();
+  const { server, base } = listen(app);
+  t.after(() => server.close());
+  const patch = await fetch(`${base()}/me/country`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ country: "United States", timeZone: "America/Chicago" }) });
+  const patched = await patch.json();
+  assert.equal(patch.status, 200);
+  assert.equal(patched.user.timeZone, "America/Chicago");
+});
+
+test("PATCH /me/country ignores an invalid time zone and falls back to the country default", async (t) => {
+  const { app } = makeApp();
+  const { server, base } = listen(app);
+  t.after(() => server.close());
+  const patch = await fetch(`${base()}/me/country`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ country: "Kenya", timeZone: "Mars/Olympus" }) });
+  assert.equal((await patch.json()).user.timeZone, "Africa/Nairobi");
+});

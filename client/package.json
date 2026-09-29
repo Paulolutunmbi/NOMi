@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "countries-and-timezones": "^3.10.0",
+    "dompurify": "^3.4.16",
     "firebase": "^12.19.0",
     "lucide-react": "^1.45.0",
     "react": "^19.2.8",

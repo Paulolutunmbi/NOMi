@@ -56,3 +56,26 @@ test("Groq provider preserves a structured self-recipient marker without an addr
   assert.equal(intent.parameters.recipient, "my own email address");
   assert.equal(intent.parameters.recipient.includes("@"), false);
 });
+
+test("Groq provider retries a rate-limited request on the fallback model", async () => {
+  const calls = [];
+  const provider = createGroqProvider({
+    config: { provider: "groq", groqApiKey: "test", groqModel: "primary-model", groqFallbackModel: "fallback-model" },
+    client: { chat: { completions: { create: async ({ model }) => {
+      calls.push(model);
+      if (model === "primary-model") throw Object.assign(new Error("rate limited"), { status: 429 });
+      return { choices: [{ message: { content: JSON.stringify({ action: "clarification", parameters: fullParameters({ body: "When?" }) }) } }] };
+    } } } },
+  });
+  const intent = await provider.generateIntent({ system: "s", userRequest: "r", untrustedRetrievedContent: [], trustedConversationContext: {} });
+  assert.deepEqual(calls, ["primary-model", "fallback-model"]);
+  assert.equal(intent.action, "clarification");
+});
+
+test("Groq provider reports ai_provider_rate_limited when the fallback is limited too", async () => {
+  const provider = createGroqProvider({
+    config: { provider: "groq", groqApiKey: "test", groqModel: "a", groqFallbackModel: "b" },
+    client: { chat: { completions: { create: async () => { throw Object.assign(new Error("rate limited"), { status: 429 }); } } } },
+  });
+  await assert.rejects(() => provider.generateIntent({ system: "s", userRequest: "r", untrustedRetrievedContent: [], trustedConversationContext: {} }), { code: "ai_provider_rate_limited" });
+});

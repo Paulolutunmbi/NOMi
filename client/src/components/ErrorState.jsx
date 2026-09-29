@@ -53,7 +53,7 @@ export default function ErrorState({ kind = 'server', onRetry, onReconnect }) {
         <button
           type="button"
           onClick={needsReconnect ? onReconnect : onRetry}
-          className="mt-2.5 rounded-lg bg-ink px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-ink-soft"
+          className="mt-2.5 rounded-lg bg-ink px-3 py-1.5 text-xs font-medium text-surface transition-colors hover:bg-ink-soft"
         >
           {needsReconnect ? copy.cta : 'Try again'}
         </button>

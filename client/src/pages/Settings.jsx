@@ -15,6 +15,8 @@ import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 import ErrorState from '../components/ErrorState'
 import Modal from '../components/Modal'
+import CountryTimeZonePicker from '../components/CountryTimeZonePicker'
+import { zonesForCountry, findCountryByName } from '../utils/countries'
 
 function Section({ title, description, children }) {
   return (
@@ -63,14 +65,15 @@ export default function Settings() {
   const [country, setCountry] = useState(null)
   const [meLoading, setMeLoading] = useState(true)
   const [editingCountry, setEditingCountry] = useState(false)
-  const [countryInput, setCountryInput] = useState('')
+  const [timeZone, setTimeZone] = useState(null)
+  const [placeInput, setPlaceInput] = useState({ country: '', timeZone: '' })
   const [countryError, setCountryError] = useState('')
   const [savingCountry, setSavingCountry] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     fetchMe()
-      .then((data) => { if (!cancelled) setCountry(data.user?.country || null) })
+      .then((data) => { if (!cancelled) { setCountry(data.user?.country || null); setTimeZone(data.user?.timeZone || null) } })
       .catch(() => {})
       .finally(() => { if (!cancelled) setMeLoading(false) })
     return () => { cancelled = true }
@@ -78,15 +81,16 @@ export default function Settings() {
 
   const handleSaveCountry = async (event) => {
     event.preventDefault()
-    if (!countryInput.trim()) { setCountryError('Enter a country.'); return }
+    if (!placeInput.country) { setCountryError('Select a country.'); return }
     setCountryError('')
     setSavingCountry(true)
     try {
-      await updateCountry(countryInput.trim())
-      setCountry(countryInput.trim())
+      await updateCountry(placeInput.country, placeInput.timeZone)
+      setCountry(placeInput.country)
+      setTimeZone(placeInput.timeZone || null)
       setEditingCountry(false)
     } catch {
-      setCountryError("NOMI didn't recognize that country. Try the full name, e.g. \"Nigeria\".")
+      setCountryError("Couldn't save that. Check your connection and try again.")
     } finally {
       setSavingCountry(false)
     }
@@ -197,10 +201,10 @@ export default function Settings() {
           {meLoading && <p className="text-sm text-ink-faint">Loading…</p>}
           {!meLoading && !editingCountry && (
             <div className="flex items-center justify-between gap-3">
-              <p className="text-sm text-ink">{country || 'Not set'}</p>
+              <p className="text-sm text-ink">{country || 'Not set'}{country && timeZone ? <span className="text-ink-faint"> · {timeZone.replace(/_/g, ' ')}</span> : null}</p>
               <button
                 type="button"
-                onClick={() => { setCountryInput(country || ''); setCountryError(''); setEditingCountry(true) }}
+                onClick={() => { const c = findCountryByName(country); setPlaceInput({ country: c?.name || '', timeZone: timeZone || (c ? zonesForCountry(c.id)[0]?.timeZone || '' : '') }); setCountryError(''); setEditingCountry(true) }}
                 className="shrink-0 rounded-lg border border-line-strong px-3 py-1.5 text-sm font-medium text-ink-soft transition-colors hover:border-nomi-orange hover:text-nomi-orange"
               >
                 {country ? 'Change' : 'Set country'}
@@ -208,16 +212,9 @@ export default function Settings() {
             </div>
           )}
           {!meLoading && editingCountry && (
-            <form onSubmit={handleSaveCountry} className="flex flex-wrap items-start gap-2">
-              <input
-                type="text"
-                value={countryInput}
-                onChange={(e) => setCountryInput(e.target.value)}
-                placeholder="e.g. Nigeria"
-                autoComplete="country-name"
-                autoFocus
-                className="min-w-0 flex-1 rounded-xl border border-line bg-surface px-3.5 py-2.5 text-[15px] text-ink placeholder:text-ink-faint focus:border-nomi-orange focus:outline-none"
-              />
+            <form onSubmit={handleSaveCountry} className="space-y-3">
+              <CountryTimeZonePicker value={placeInput} onChange={setPlaceInput} idPrefix="settings" />
+              <div className="flex gap-2">
               <button
                 type="submit"
                 disabled={savingCountry}
@@ -232,6 +229,7 @@ export default function Settings() {
               >
                 Cancel
               </button>
+              </div>
             </form>
           )}
           {countryError && <p className="mt-2 text-xs text-danger">{countryError}</p>}

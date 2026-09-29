@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import EmailBody from './EmailBody'
 
 function initials(name, email) {
   const source = name || email || '?'
@@ -181,7 +182,7 @@ function EventCard({ event, timeZoneLabel, timeZoneDefaulted, timeZoneCountry })
 function MessagePreview({ message, onOpen, onComposeHint }) {
   const email = message.from?.email || message.email || null
   const displayName = message.from?.name || message.displayName || message.sender || null
-  const isFullMessage = typeof message.body === 'string' && message.body.length > 0
+  const isFullMessage = (typeof message.body === 'string' && message.body.length > 0) || (typeof message.bodyHtml === 'string' && message.bodyHtml.length > 0)
   const content = (
     <div className="flex items-start gap-3">
       <Avatar name={displayName} email={email} />
@@ -189,7 +190,7 @@ function MessagePreview({ message, onOpen, onComposeHint }) {
         <p className="truncate text-sm font-semibold text-ink">{message.subject || 'No subject'}</p>
         <p className="mt-0.5 truncate text-xs text-ink-faint">{message.sender || email || 'Unknown sender'}{message.date ? ` · ${message.date}` : ''}</p>
         {message.snippet && !isFullMessage && <p className="mt-1 line-clamp-2 text-xs text-ink-faint">{message.snippet}</p>}
-        {isFullMessage && <p className="mt-2 whitespace-pre-wrap text-sm text-ink-soft">{message.body}</p>}
+        {isFullMessage && <EmailBody html={message.bodyHtml} text={message.body} />}
       </div>
     </div>
   )
@@ -209,6 +210,11 @@ function MessagePreview({ message, onOpen, onComposeHint }) {
           >
             Reply
           </button>
+          {typeof message.webLink === 'string' && message.webLink.startsWith('https://mail.google.com/') && (
+            <a href={message.webLink} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-ink-soft transition-colors hover:border-nomi-orange hover:text-ink">
+              Open in Gmail
+            </a>
+          )}
           {email && (
             <button
               type="button"

@@ -2,6 +2,20 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { executeAiAction, decideSendApproval, updateSendDraft, fetchChatMessages, fetchChat, saveChatMessage } from '../api/nomiClient'
 import { errorKindFor } from '../utils/errorKind'
 
+// The sanitized-display HTML of an opened email can be hundreds of KB. It is
+// shown live but never saved into chat history (privacy and size); reopened
+// chats fall back to the plain-text body and an "Open in Gmail" link.
+const stripHeavyEmailFields = (result) => {
+  if (!result || typeof result !== 'object') return result
+  const clean = { ...result }
+  delete clean.bodyHtml
+  if (clean.message && typeof clean.message === 'object') {
+    clean.message = { ...clean.message }
+    delete clean.message.bodyHtml
+  }
+  return clean
+}
+
 let turnCounter = 0
 const nextId = () => `t${++turnCounter}-${Date.now()}`
 
@@ -111,7 +125,7 @@ export function useNomiConversation(selectedChatId) {
       const data = await executeAiAction({ conversationId: chatId, message, approval, attachmentIds, signal: controller.signal })
       const turn = { id: nextId(), role: 'nomi', ...turnFromOutcome(data.outcome, attachmentsMeta) }
       setTurns((prev) => [...prev, turn])
-      await saveChatMessage(chatId, { role: 'assistant', content: turn.message || turn.prompt || turn.result?.message || turn.result?.body || turn.kind, metadata: { kind: turn.kind, action: turn.action, result: turn.result, candidates: turn.candidates, selectedIdentity: turn.selectedIdentity, selectedConversation: turn.selectedConversation } }).catch(() => {})
+      await saveChatMessage(chatId, { role: 'assistant', content: turn.message || turn.prompt || turn.result?.message || turn.result?.body || turn.kind, metadata: { kind: turn.kind, action: turn.action, result: stripHeavyEmailFields(turn.result), candidates: turn.candidates, selectedIdentity: turn.selectedIdentity, selectedConversation: turn.selectedConversation } }).catch(() => {})
       return turn
     } catch (error) {
       if (error?.name === 'AbortError') return null

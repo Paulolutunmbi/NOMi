@@ -6,6 +6,7 @@ const MAX_MARK_READ_IDS = 50;
 const MAX_RESULTS = 50;
 const MAX_QUERY_LENGTH = 500;
 const MAX_BODY_LENGTH = 20 * 1024;
+const MAX_HTML_BODY_LENGTH = 400 * 1024;
 const MAX_SNIPPET_LENGTH = 1000;
 const MAX_HEADER_LENGTH = 500;
 const EMAIL = /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/;
@@ -67,7 +68,17 @@ const normalizeMessage = (message, includeBody = false) => {
     recipient: header(message, "To"), subject: header(message, "Subject"), date: header(message, "Date"),
     snippet: text(message?.snippet, MAX_SNIPPET_LENGTH),
   };
-  if (includeBody) result.body = plainText(message?.payload);
+  if (includeBody) {
+    result.body = plainText(message?.payload);
+    // Newsletters and marketing mail are mostly HTML (images, buttons). The
+    // client sanitizes this and shows it in a sandboxed frame. It is only
+    // ever returned to the signed-in user for display; it is never added to
+    // the AI prompt or stored in the conversation context.
+    const threadRef = text(message?.threadId || message?.id, 200);
+    if (/^[A-Za-z0-9_-]+$/.test(threadRef)) result.webLink = `https://mail.google.com/mail/u/0/#all/${threadRef}`;
+    const html = htmlBodyPart(message?.payload);
+    if (html) result.bodyHtml = decodeBase64Url(html).slice(0, MAX_HTML_BODY_LENGTH);
+  }
   return result;
 };
 const encodeRaw = (value) => Buffer.from(value, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");

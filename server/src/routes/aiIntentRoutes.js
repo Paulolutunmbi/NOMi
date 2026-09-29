@@ -46,6 +46,10 @@ const createAIIntentRouter = ({ gateway, contextService = createConversationCont
         await audit({ user, provider: config.provider, conversationId, outcome: "success" }).catch(() => {});
         return res.status(200).json({ success: true, intent });
       }
+      if (result.status === "provider_error" && result.reason === "ai_provider_rate_limited") {
+        await audit({ user, provider: config.provider, conversationId, outcome: "failure", reason: result.reason }).catch(() => {});
+        return clientError(res, 429, "AI_RATE_LIMITED", "NOMI is handling a lot right now. Try again in a moment.");
+      }
       const validationFailure = result.status === "invalid";
       await audit({ user, provider: config.provider, conversationId, outcome: "failure", reason: result.reason }).catch(() => {});
       return clientError(res, validationFailure ? 422 : 503, validationFailure ? "AI_INTENT_INVALID" : "AI_PROVIDER_ERROR", validationFailure ? "The request could not be converted into a valid NOMI action." : "Unable to process the request right now.");

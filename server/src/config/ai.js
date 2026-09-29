@@ -1,9 +1,13 @@
 const DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b";
+// Used only when the primary model is rate limited. Separate models have
+// separate Groq rate-limit buckets. Set GROQ_FALLBACK_MODEL="" to disable.
+const DEFAULT_GROQ_FALLBACK_MODEL = "openai/gpt-oss-120b";
 
 const getAIConfig = (env = process.env) => ({
   provider: env.AI_PROVIDER || null,
   groqApiKey: env.GROQ_API_KEY || null,
   groqModel: env.GROQ_MODEL || DEFAULT_GROQ_MODEL,
+  groqFallbackModel: env.GROQ_FALLBACK_MODEL === undefined ? DEFAULT_GROQ_FALLBACK_MODEL : (env.GROQ_FALLBACK_MODEL || null),
 });
 
 const validateAIConfig = (config = getAIConfig()) => {
@@ -15,4 +19,4 @@ const validateAIConfig = (config = getAIConfig()) => {
   return config;
 };
 
-module.exports = { DEFAULT_GROQ_MODEL, getAIConfig, validateAIConfig };
+module.exports = { DEFAULT_GROQ_MODEL, DEFAULT_GROQ_FALLBACK_MODEL, getAIConfig, validateAIConfig };

@@ -1783,6 +1783,9 @@ test("opening a message via gmail_select:N also fires a best-effort gmail.markRe
   assert.equal(calls[0].action, "gmail.read");
   assert.equal(calls[1].action, "gmail.markRead");
   assert.deepEqual(calls[1].payload.messageIds, ["trusted-2"]);
+  // Opening the mail is the user's own action, so no prior permission is needed.
+  assert.equal(calls[1].approval, "allow_once");
+  assert.equal(result.result.markedRead, true);
 });
 
 test("a direct gmail.read proposal also fires a best-effort gmail.markRead for the opened message", async () => {

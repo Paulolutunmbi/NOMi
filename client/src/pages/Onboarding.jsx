@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext'
 import { markOnboarded } from '../utils/onboarding'
 import { errorKindFor } from '../utils/errorKind'
 import { getGoogleConnectUrl, fetchMe, updateCountry } from '../api/nomiClient'
+import CountryTimeZonePicker from '../components/CountryTimeZonePicker'
 
 function StepRow({ index, title, body, state, children }) {
   return (
@@ -49,7 +50,7 @@ export default function Onboarding() {
   // Only asked here for a Google sign-in, which skips the sign-up form's own
   // country field. undefined = still checking; null = none on file yet.
   const [country, setCountry] = useState(undefined)
-  const [countryInput, setCountryInput] = useState('')
+  const [placeInput, setPlaceInput] = useState({ country: '', timeZone: '' })
   const [countryError, setCountryError] = useState('')
   const [savingCountry, setSavingCountry] = useState(false)
 
@@ -61,14 +62,14 @@ export default function Onboarding() {
 
   const handleSaveCountry = async (event) => {
     event.preventDefault()
-    if (!countryInput.trim()) { setCountryError('Enter your country.'); return }
+    if (!placeInput.country) { setCountryError('Select your country.'); return }
     setCountryError('')
     setSavingCountry(true)
     try {
-      await updateCountry(countryInput.trim())
-      setCountry(countryInput.trim())
+      await updateCountry(placeInput.country, placeInput.timeZone)
+      setCountry(placeInput.country)
     } catch {
-      setCountryError("NOMI didn't recognize that country. Try the full name, e.g. \"Nigeria\".")
+      setCountryError("Couldn't save that. Check your connection and try again.")
     } finally {
       setSavingCountry(false)
     }
@@ -133,15 +134,8 @@ export default function Onboarding() {
             ) : country ? (
               <p className="text-sm text-ink">{country}</p>
             ) : (
-              <form onSubmit={handleSaveCountry} className="flex flex-wrap items-start gap-2">
-                <input
-                  type="text"
-                  value={countryInput}
-                  onChange={(e) => setCountryInput(e.target.value)}
-                  placeholder="e.g. Nigeria"
-                  autoComplete="country-name"
-                  className="min-w-0 flex-1 rounded-xl border border-line bg-surface px-3.5 py-2.5 text-[15px] text-ink placeholder:text-ink-faint focus:border-nomi-orange focus:outline-none"
-                />
+              <form onSubmit={handleSaveCountry} className="space-y-3">
+                <CountryTimeZonePicker value={placeInput} onChange={setPlaceInput} idPrefix="onboarding" />
                 <button
                   type="submit"
                   disabled={savingCountry}
