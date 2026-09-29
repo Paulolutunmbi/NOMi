@@ -37,6 +37,11 @@ const temporaryConversationSchema = new mongoose.Schema({
   calendarEventIds: { type: [String], default: [] },
   calendarCandidates: { type: [mongoose.Schema.Types.Mixed], default: [] },
   trustedCalendarEvent: { type: mongoose.Schema.Types.Mixed, default: null },
+  // Calendar time zone handling: a meeting waiting for the user to pick a
+  // zone (server-verified intent, never client-supplied), and the zone they
+  // last chose so they are not asked again in this chat.
+  pendingTimeZone: { type: mongoose.Schema.Types.Mixed, default: null },
+  userTimeZone: { type: String, default: null },
   placeholderMappings: { type: Map, of: mongoose.Schema.Types.Mixed, default: {} },
   expiresAt: { type: Date, required: true, index: { expires: 0 } },
 }, { timestamps: true });

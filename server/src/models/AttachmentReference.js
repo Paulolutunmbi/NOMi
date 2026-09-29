@@ -8,7 +8,7 @@ const attachmentReferenceSchema = new mongoose.Schema({
   secureUrl: { type: String, required: true },
   filename: { type: String, required: true, maxlength: 255 },
   mimeType: { type: String, required: true, maxlength: 100 },
-  resourceType: { type: String, required: true, enum: ["image"] },
+  resourceType: { type: String, required: true, enum: ["image", "video", "raw"] },
   size: { type: Number, required: true },
   // Cleanup is performed by the service so the corresponding Cloudinary
   // asset is deleted before its Mongo metadata is removed.

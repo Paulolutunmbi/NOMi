@@ -117,3 +117,36 @@ test("googleIntegration routes Gmail and Calendar actions to the correct provide
   assert.equal(integration.capabilities.includes("gmail.search"), true);
   assert.equal(integration.capabilities.includes("calendar.create"), true);
 });
+
+test("rescheduling with only a new start keeps the meeting's original length, in the given time zone", async () => {
+  const fake = fakeCalendar(); // evt1 runs 15:00-15:30 (30 minutes)
+  await providerFor(fake).execute({}, "calendar.update", { eventId: "evt1", startDateTime: "2026-10-05T10:00:00", timeZone: "Africa/Lagos" });
+  const body = fake.calls.patch[0].requestBody;
+  assert.deepEqual(body.start, { dateTime: "2026-10-05T10:00:00", timeZone: "Africa/Lagos" });
+  assert.deepEqual(body.end, { dateTime: "2026-10-05T10:30:00", timeZone: "Africa/Lagos" });
+  assert.equal(fake.calls.patch[0].sendUpdates, "all", "existing guests are told the time moved");
+});
+
+test("rescheduling with an explicit end uses it, and an end before the start is rejected", async () => {
+  const fake = fakeCalendar();
+  await providerFor(fake).execute({}, "calendar.update", { eventId: "evt1", startDateTime: "2026-10-05T10:00:00", endDateTime: "2026-10-05T12:00:00", timeZone: "Africa/Lagos" });
+  assert.equal(fake.calls.patch[0].requestBody.end.dateTime, "2026-10-05T12:00:00");
+  await assert.rejects(() => providerFor(fake).execute({}, "calendar.update", { eventId: "evt1", startDateTime: "2026-10-05T10:00:00", endDateTime: "2026-10-05T09:00:00", timeZone: "Africa/Lagos" }), { code: "calendar_invalid_request" });
+});
+
+test("renaming an event with guests does not email them, but adding several people appends all of them", async () => {
+  const fake = fakeCalendar();
+  await providerFor(fake).execute({}, "calendar.update", { eventId: "evt1", summary: "Renamed" });
+  assert.equal(fake.calls.patch[0].sendUpdates, "none");
+  await providerFor(fake).execute({}, "calendar.update", { eventId: "evt1", attendees: "ann@example.com, bob@example.com; paul@example.com" });
+  const emails = fake.calls.patch[1].requestBody.attendees.map((a) => a.email);
+  assert.deepEqual(emails, ["paul@example.com", "ann@example.com", "bob@example.com"], "keeps existing guest once, appends the new ones");
+  assert.equal(fake.calls.patch[1].requestBody.attendees[0].responseStatus, "accepted");
+  assert.equal(fake.calls.patch[1].sendUpdates, "all");
+});
+
+test("calendar.create invites every attendee given", async () => {
+  const fake = fakeCalendar();
+  await providerFor(fake).execute({}, "calendar.create", { summary: "Kickoff", startDateTime: "2026-10-05T10:00:00", endDateTime: "2026-10-05T11:00:00", timeZone: "Africa/Lagos", attendees: "a@x.com, b@y.com, c@z.com" });
+  assert.deepEqual(fake.calls.insert[0].requestBody.attendees.map((a) => a.email), ["a@x.com", "b@y.com", "c@z.com"]);
+});

@@ -57,6 +57,54 @@ test("persistent Gmail and Calendar chats reload for their owner and remain acco
   const listB = await fetch(base, { headers: { "x-user": "user-b" } }).then((r) => r.json());
   assert.equal(listB.chats.length, 0);
   assert.ok(gmail.summary.length <= 5000);
+
+});
+
+test("deleting a chat removes it, its messages, and its trusted conversation context, but only for its owner", async (t) => {
+  const chats = [];
+  const messages = [];
+  const conversations = [{ conversationId: "leave-me", user: "user-a" }];
+  const ChatSession = {
+    find: (filter) => makeQuery(chats.filter((item) => String(item.user) === String(filter.user) && (!filter.type || item.type === filter.type))),
+    findOne: async (filter) => chats.find((item) => String(item._id) === String(filter._id) && String(item.user) === String(filter.user)) || null,
+    create: async (data) => { const item = { _id: new mongoose.Types.ObjectId(), ...data, title: null, summary: "", lastMessageAt: new Date(), metadata: {} }; chats.push(item); return item; },
+    updateOne: async (filter, update) => { const item = chats.find((chat) => String(chat._id) === String(filter._id) && String(chat.user) === String(filter.user)); if (item) Object.assign(item, update.$set); },
+    deleteOne: async (filter) => { const index = chats.findIndex((item) => String(item._id) === String(filter._id) && String(item.user) === String(filter.user)); if (index >= 0) chats.splice(index, 1); },
+  };
+  const ChatMessage = {
+    find: (filter) => makeQuery(messages.filter((item) => String(item.chat) === String(filter.chat) && String(item.user) === String(filter.user))),
+    create: async (item) => { const saved = { ...item, _id: new mongoose.Types.ObjectId(), createdAt: new Date(Date.now() + messages.length) }; messages.push(saved); return saved; },
+    deleteMany: async (filter) => { for (let i = messages.length - 1; i >= 0; i -= 1) if (String(messages[i].chat) === String(filter.chat) && String(messages[i].user) === String(filter.user)) messages.splice(i, 1); },
+  };
+  const TemporaryConversation = {
+    deleteOne: async (filter) => { const index = conversations.findIndex((item) => item.conversationId === filter.conversationId && item.user === filter.user); if (index >= 0) conversations.splice(index, 1); },
+  };
+  const app = express(); app.use(express.json());
+  app.use("/api/chats", createChatRouter({
+    authMiddleware: (req, _res, next) => { req.user = { sub: req.header("x-user") || "user-a" }; next(); },
+    getUser: async (claims) => ({ _id: claims.sub }), chatSessionModel: ChatSession, chatMessageModel: ChatMessage, temporaryConversationModel: TemporaryConversation,
+  }));
+  const server = app.listen(0); t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}/api/chats`;
+  const chat = (await fetch(base, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "gmail" }) }).then((r) => r.json())).chat;
+  conversations.push({ conversationId: chat.id, user: "user-a" });
+  await fetch(`${base}/${chat.id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ role: "user", content: "hello" }) });
+
+  const deniedDelete = await fetch(`${base}/${chat.id}`, { method: "DELETE", headers: { "x-user": "user-b" } });
+  assert.equal(deniedDelete.status, 404);
+  assert.equal(chats.length, 1);
+
+  const response = await fetch(`${base}/${chat.id}`, { method: "DELETE" });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.success, true);
+  assert.equal(chats.length, 0);
+  assert.equal(messages.length, 0);
+  assert.equal(conversations.some((item) => item.conversationId === chat.id), false);
+  assert.equal(conversations.some((item) => item.conversationId === "leave-me"), true);
+
+  const missing = await fetch(`${base}/${chat.id}`, { method: "DELETE" });
+  assert.equal(missing.status, 404);
 });
 
 test("chat transcript metadata strips binary payload fields", () => {

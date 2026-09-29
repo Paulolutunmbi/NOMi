@@ -3,11 +3,11 @@ const ACTIONS = {
   "gmail.search": { required: ["query"], allowed: ["query", "maxResults"] },
   "gmail.draft": { required: ["recipient", "body"], allowed: ["recipient", "subject", "body"] },
   "gmail.send": { required: ["recipient", "body"], allowed: ["recipient", "subject", "body"] },
-  // Marks the currently trusted/shown Gmail messages as read. Takes no
-  // model-supplied parameters — the server acts only on message IDs already
-  // trusted in this conversation (from a prior search/read), never on IDs the
-  // model invents.
-  "gmail.markRead": { required: [], allowed: [] },
+  // Marks Gmail messages as read. The model may only supply an optional
+  // count (maxResults, "mark the last 3 as read"); the server acts only on
+  // message IDs it trusts (already in this conversation, or fetched by its
+  // own unread search), never on IDs the model invents.
+  "gmail.markRead": { required: [], allowed: ["maxResults"] },
   "gmail.draft.reply": { required: ["messageId", "body"], allowed: ["messageId", "body", "subject"] },
   "gmail.send.reply": { required: ["messageId", "body"], allowed: ["messageId", "body", "subject"] },
   // Content-only edit of the currently trusted draft ("make it more casual").

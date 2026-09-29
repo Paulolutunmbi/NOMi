@@ -124,6 +124,10 @@ export function saveChatMessage(chatId, { role, content, metadata }) {
   return request(`/api/chats/${encodeURIComponent(chatId)}/messages`, { method: 'POST', body: { role, content, metadata } })
 }
 
+export function deleteChat(chatId) {
+  return request(`/api/chats/${encodeURIComponent(chatId)}`, { method: 'DELETE' })
+}
+
 /**
  * Uploads one image (as a data: URL string from FileReader) for staging.
  * Returns { id, filename, mimeType, size } — never the raw bytes back.
@@ -165,6 +169,29 @@ export function disconnectGoogle() {
 
 export function fetchMe() {
   return request('/api/auth/me')
+}
+
+// Sets or changes the country NOMI uses to default this user's calendar
+// events to a time zone (and, going forward, their mail time zone too).
+export function updateCountry(country) {
+  return request('/api/auth/me/country', { method: 'PATCH', body: { country } })
+}
+
+// Public check used on the sign-up form, before there is a token: is this a
+// country NOMI can map to a time zone? Resolves true/false; a network failure
+// resolves true so an outage never blocks sign-up (Onboarding asks again).
+export async function isCountryRecognized(country) {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/auth/country/check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ country }),
+    })
+    if (response.status === 400) return false
+    return true
+  } catch {
+    return true
+  }
 }
 
 export function logoutNomi() {

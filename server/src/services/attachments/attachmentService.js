@@ -16,7 +16,9 @@ const cloudinaryConfig = () => {
     ? { cloudName: parsed.hostname, apiKey: decodeURIComponent(parsed.username), apiSecret: decodeURIComponent(parsed.password) }
     : null;
 };
-const cloudinaryUpload = async ({ id, filename, mimeType, buffer }) => {
+const RESOURCE_TYPES = new Set(["image", "video", "raw"]);
+const cloudinaryUpload = async ({ id, filename, mimeType, buffer, resourceType = "image" }) => {
+  const kind = RESOURCE_TYPES.has(resourceType) ? resourceType : "raw";
   const config = cloudinaryConfig();
   if (!config) { const error = new Error("Cloudinary server configuration is missing"); error.code = "attachment_storage_not_configured"; throw error; }
   const timestamp = Math.floor(Date.now() / 1000);
@@ -29,14 +31,15 @@ const cloudinaryUpload = async ({ id, filename, mimeType, buffer }) => {
   form.append("folder", folder);
   form.append("public_id", id);
   form.append("signature", signature);
-  const response = await fetch(`https://api.cloudinary.com/v1_1/${config.cloudName}/image/upload`, { method: "POST", body: form });
+  const response = await fetch(`https://api.cloudinary.com/v1_1/${config.cloudName}/${kind}/upload`, { method: "POST", body: form });
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.public_id || !result.secure_url) {
     const error = new Error("Cloudinary could not store this attachment"); error.code = "attachment_cloudinary_upload_failed"; throw error;
   }
   return result;
 };
-const cloudinaryDestroy = async (publicId) => {
+const cloudinaryDestroy = async (publicId, resourceType = "image") => {
+  const kind = RESOURCE_TYPES.has(resourceType) ? resourceType : "raw";
   const config = cloudinaryConfig();
   if (!config) return;
   const timestamp = Math.floor(Date.now() / 1000);
@@ -44,7 +47,7 @@ const cloudinaryDestroy = async (publicId) => {
   const form = new FormData();
   form.append("public_id", publicId); form.append("api_key", config.apiKey);
   form.append("timestamp", String(timestamp)); form.append("signature", signature);
-  const response = await fetch(`https://api.cloudinary.com/v1_1/${config.cloudName}/image/destroy`, { method: "POST", body: form });
+  const response = await fetch(`https://api.cloudinary.com/v1_1/${config.cloudName}/${kind}/destroy`, { method: "POST", body: form });
   if (!response.ok) { const error = new Error("Cloudinary could not remove this attachment"); error.code = "attachment_cloudinary_delete_failed"; throw error; }
   return response.json().catch(() => ({}));
 };
@@ -61,15 +64,15 @@ const storeAttachment = async ({ user, chatId = null, filename, mimeType, data }
   if (!validation.valid) { const error = new Error(validation.message); error.code = validation.code; throw error; }
   const id = crypto.randomUUID();
   if (mongoose.connection.readyState === 1) {
-    const uploaded = await cloudinaryUpload({ id, filename: validation.filename, mimeType: validation.mimeType, buffer: validation.buffer });
+    const uploaded = await cloudinaryUpload({ id, filename: validation.filename, mimeType: validation.mimeType, buffer: validation.buffer, resourceType: validation.kind });
     try {
       const record = await AttachmentReference.create({ id, user: user._id, chat: chatId && mongoose.isValidObjectId(chatId) ? chatId : null,
         publicId: uploaded.public_id, secureUrl: uploaded.secure_url, filename: validation.filename,
-        mimeType: validation.mimeType, resourceType: uploaded.resource_type || "image", size: validation.size,
+        mimeType: validation.mimeType, resourceType: uploaded.resource_type || validation.kind || "image", size: validation.size,
         expiresAt: new Date(Date.now() + ATTACHMENT_TTL_MS) });
       return publicMetadata(record);
     } catch (error) {
-      await cloudinaryDestroy(uploaded.public_id).catch(() => {});
+      await cloudinaryDestroy(uploaded.public_id, uploaded.resource_type || validation.kind).catch(() => {});
       throw error;
     }
   }
@@ -124,7 +127,7 @@ const removeAttachments = async ({ user, attachmentIds = [] }) => {
   if (!user?._id || !Array.isArray(attachmentIds)) return;
   if (mongoose.connection.readyState === 1) {
     const records = await AttachmentReference.find({ id: { $in: attachmentIds }, user: user._id }).lean();
-    for (const item of records) await cloudinaryDestroy(item.publicId);
+    for (const item of records) await cloudinaryDestroy(item.publicId, item.resourceType);
     await AttachmentReference.deleteMany({ id: { $in: records.map((item) => item.id) }, user: user._id });
     return;
   }
@@ -138,7 +141,7 @@ const cleanupExpiredAttachments = async () => {
   const expired = await AttachmentReference.find({ expiresAt: { $lte: new Date() } }).lean();
   const deletedIds = [];
   for (const item of expired) {
-    try { await cloudinaryDestroy(item.publicId); deletedIds.push(item.id); } catch { /* retry on the next cleanup pass */ }
+    try { await cloudinaryDestroy(item.publicId, item.resourceType); deletedIds.push(item.id); } catch { /* retry on the next cleanup pass */ }
   }
   return deletedIds.length ? AttachmentReference.deleteMany({ id: { $in: deletedIds } }) : { deletedCount: 0 };
 };

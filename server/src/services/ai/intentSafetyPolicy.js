@@ -57,7 +57,12 @@ const explicitlyRequestedRecipientPlaceholders = (userRequest, mappings = {}) =>
       const value = /\[EMAIL_\d+\]/i.test(address) ? address : /\[EMAIL_\d+\]/i.test(label) ? label : address;
       return /^\[EMAIL_\d+\]$/i.test(value) ? value : `[${value}]`;
     });
-    return new RegExp(`(?:\\b(?:send|draft|write|compose|mail|email|add|invite|include)\\b[^.!?]{0,220}\\b(?:to|for|in)\\s*${escaped}|\\b(?:email|mail)\\s+${escaped})`, "i").test(plainRequest);
+    // Calendar invites are commonly phrased as "meeting/call/event *with*
+    // someone" rather than "send/email *to* someone" — that preposition, and
+    // the scheduling verbs that pair with it, need to count as an explicit
+    // request too, or a literally-typed attendee address gets rejected as
+    // untrusted just because of how the sentence is worded.
+    return new RegExp(`(?:\\b(?:send|draft|write|compose|mail|email|add|invite|include|create|schedule|set\\s*up|book|meet)\\b[^.!?]{0,220}\\b(?:to|for|in|with)\\s*${escaped}|\\b(?:email|mail)\\s+${escaped}|\\b(?:add|invite|include|cc)\\s+(?:(?:\\[[^\\]]+\\]|and|also|,|&)\\s*)*${escaped})`, "i").test(plainRequest);
   });
 };
 

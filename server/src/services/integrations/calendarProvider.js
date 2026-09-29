@@ -3,6 +3,8 @@
 // calendar, never invents or trusts an event ID from outside its own prior
 // search/read results, and never returns raw provider errors to the caller.
 
+const { addHoursWallClock, stripOffset } = require("../calendar/timeZoneResolver");
+
 const SUPPORTED_ACTIONS = new Set([
   "calendar.search", "calendar.read", "calendar.freebusy", "calendar.create", "calendar.update", "calendar.delete",
 ]);
@@ -145,21 +147,51 @@ const createCalendarProvider = ({ calendarFactory } = {}) => {
         if (payload.summary !== undefined && payload.summary !== null) requestBody.summary = text(payload.summary, MAX_SHORT_TEXT_LENGTH);
         if (payload.description !== undefined && payload.description !== null) requestBody.description = text(payload.description, MAX_TEXT_LENGTH);
         if (payload.location !== undefined && payload.location !== null) requestBody.location = text(payload.location, MAX_SHORT_TEXT_LENGTH);
+        let existingEvent = null;
+        const loadExisting = async () => (existingEvent ||= await getEvent(calendar, id));
+        const zone = payload.timeZone ? { timeZone: text(payload.timeZone, 100) } : {};
+        let newStart = null;
+        let newEnd = null;
         if (payload.startDateTime) {
-          const start = isoDateTime(payload.startDateTime);
-          if (!start) throw safeError("calendar_invalid_request", "A valid start time is required");
-          requestBody.start = { dateTime: start, ...(payload.timeZone ? { timeZone: text(payload.timeZone, 100) } : {}) };
+          newStart = isoDateTime(payload.startDateTime);
+          if (!newStart) throw safeError("calendar_invalid_request", "A valid start time is required");
+          requestBody.start = { dateTime: newStart, ...zone };
         }
         if (payload.endDateTime) {
-          const end = isoDateTime(payload.endDateTime);
-          if (!end) throw safeError("calendar_invalid_request", "A valid end time is required");
-          requestBody.end = { dateTime: end, ...(payload.timeZone ? { timeZone: text(payload.timeZone, 100) } : {}) };
+          newEnd = isoDateTime(payload.endDateTime);
+          if (!newEnd) throw safeError("calendar_invalid_request", "A valid end time is required");
+          requestBody.end = { dateTime: newEnd, ...zone };
         }
-        if (payload.attendees !== undefined && payload.attendees !== null) requestBody.attendees = parseAttendees(payload.attendees);
+        // Rescheduling: when only the start moves, keep the meeting the same
+        // length instead of leaving the old end time behind (which would put
+        // the end before the new start, or silently change the duration).
+        if (newStart && !newEnd) {
+          const current = await loadExisting();
+          const oldStart = Date.parse(current.start?.dateTime || "");
+          const oldEnd = Date.parse(current.end?.dateTime || "");
+          const hours = Number.isFinite(oldStart) && Number.isFinite(oldEnd) && oldEnd > oldStart ? (oldEnd - oldStart) / 3600000 : 1;
+          const shiftedEnd = addHoursWallClock(stripOffset(newStart), hours);
+          if (!shiftedEnd) throw safeError("calendar_invalid_request", "A valid start time is required");
+          requestBody.end = { dateTime: shiftedEnd, ...zone };
+        }
+        if (newStart && newEnd && stripOffset(newEnd) <= stripOffset(newStart)) {
+          throw safeError("calendar_invalid_request", "The end time must be after the start time");
+        }
+        if (payload.attendees !== undefined && payload.attendees !== null) {
+          // "Add X to the meeting" must add, not replace: keep everyone who
+          // is already invited (with their responses) and append the new people.
+          const existing = (await loadExisting()).attendees || [];
+          const known = new Set(existing.map((entry) => String(entry.email || "").toLowerCase()));
+          const added = parseAttendees(payload.attendees).filter((entry) => !known.has(entry.email));
+          requestBody.attendees = [...existing.map((entry) => ({ email: entry.email, ...(entry.responseStatus ? { responseStatus: entry.responseStatus } : {}), ...(entry.optional ? { optional: true } : {}) })), ...added];
+        }
         if (payload.addMeet) requestBody.conferenceData = { createRequest: { requestId: `nomi-${Date.now()}` } };
         if (!Object.keys(requestBody).length) throw safeError("calendar_invalid_request", "At least one field to update is required");
+        // Tell guests when people are added or when the time moves.
+        const timeChanged = Boolean(requestBody.start || requestBody.end);
+        const notify = requestBody.attendees?.length ? true : timeChanged && (await loadExisting()).attendees?.length > 0;
         const response = await calendar.events.patch({
-          calendarId: "primary", eventId: id, requestBody, conferenceDataVersion: payload.addMeet ? 1 : 0, sendUpdates: requestBody.attendees?.length ? "all" : "none",
+          calendarId: "primary", eventId: id, requestBody, conferenceDataVersion: payload.addMeet ? 1 : 0, sendUpdates: notify ? "all" : "none",
         }).catch((error) => { throw normalizeGoogleError(error, { eventNotFound: true }); });
         return { event: normalizeEvent(response.data), auditMetadata: { operation: "calendar_event_updated" } };
       }

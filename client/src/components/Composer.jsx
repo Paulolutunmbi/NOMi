@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { uploadAttachment, deleteAttachment, NomiApiError } from '../api/nomiClient'
 import {
-  ALLOWED_MIME_TYPES,
+  ACCEPT_ATTRIBUTE,
+  MAX_VIDEO_SECONDS,
+  SUPPORTED_FILES_MESSAGE,
+  isSupportedFile,
+  isVideoFile,
+  readVideoDuration,
+  fileKind,
   MAX_ATTACHMENTS_COUNT,
   MAX_FILE_SIZE,
   MAX_TOTAL_SIZE,
@@ -13,6 +19,33 @@ import {
 let attachmentCounter = 0
 const nextAttachmentId = () => `a${++attachmentCounter}`
 
+function FileIcon({ filename }) {
+  const kind = fileKind(filename)
+  if (kind === 'video') {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="shrink-0" aria-hidden="true">
+        <rect x="3" y="5.5" width="13" height="13" rx="2.5" stroke="currentColor" strokeWidth="1.6" />
+        <path d="m16 10.5 5-2.5v8l-5-2.5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      </svg>
+    )
+  }
+  if (kind === 'document') {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="shrink-0" aria-hidden="true">
+        <path d="M7 3.5h7l4 4v13H7z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+        <path d="M14 3.5v4h4M9.5 12h5M9.5 15.5h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    )
+  }
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="shrink-0" aria-hidden="true">
+      <rect x="3.5" y="3.5" width="17" height="17" rx="2.5" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="9" cy="9.5" r="1.5" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M5 17.5 9.5 13a1.6 1.6 0 0 1 2.2 0L14 15.3M15.5 12.5 17 14a1.6 1.6 0 0 1 .5 1.1V17.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 function AttachmentChip({ attachment, onRemove }) {
   const { filename, size, status, error } = attachment
   return (
@@ -21,13 +54,9 @@ function AttachmentChip({ attachment, onRemove }) {
         status === 'error' ? 'border-danger/40 bg-danger-tint text-danger' : 'border-line bg-surface-muted text-ink-soft'
       }`}
     >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="shrink-0" aria-hidden="true">
-        <rect x="3.5" y="3.5" width="17" height="17" rx="2.5" stroke="currentColor" strokeWidth="1.6" />
-        <circle cx="9" cy="9.5" r="1.5" stroke="currentColor" strokeWidth="1.4" />
-        <path d="M5 17.5 9.5 13a1.6 1.6 0 0 1 2.2 0L14 15.3M15.5 12.5 17 14a1.6 1.6 0 0 1 .5 1.1V17.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
+      <FileIcon filename={filename} />
       <span className="max-w-[9rem] truncate font-medium">{filename}</span>
-      {status === 'uploading' && <span className="shrink-0 text-ink-faint">Uploading…</span>}
+      {(status === 'uploading' || status === 'checking') && <span className="shrink-0 text-ink-faint">{status === 'checking' ? 'Checking…' : 'Uploading…'}</span>}
       {status === 'ready' && <span className="shrink-0 text-ink-faint">{formatBytes(size)}</span>}
       {status === 'error' && <span className="shrink-0">{error}</span>}
       <button
@@ -65,7 +94,7 @@ export default function Composer({ placeholder, disabled, onSend, chatId, draftT
   }, [draftText?.token])
 
   const readyAttachments = attachments.filter((a) => a.status === 'ready')
-  const hasUploading = attachments.some((a) => a.status === 'uploading')
+  const hasUploading = attachments.some((a) => a.status === 'uploading' || a.status === 'checking')
 
   const updateAttachment = (clientId, patch) => {
     setAttachments((prev) => prev.map((a) => (a.clientId === clientId ? { ...a, ...patch } : a)))
@@ -108,8 +137,8 @@ export default function Composer({ placeholder, disabled, onSend, chatId, draftT
         toAdd.push({ clientId, filename: file.name, size: file.size, status: 'error', error: `You can attach up to ${MAX_ATTACHMENTS_COUNT} files.` })
         continue
       }
-      if (!ALLOWED_MIME_TYPES.has(file.type)) {
-        toAdd.push({ clientId, filename: file.name, size: file.size, status: 'error', error: 'Only PNG, JPEG, and WebP images are supported.' })
+      if (!isSupportedFile(file)) {
+        toAdd.push({ clientId, filename: file.name, size: file.size, status: 'error', error: SUPPORTED_FILES_MESSAGE })
         continue
       }
       if (file.size > MAX_FILE_SIZE) {
@@ -123,11 +152,25 @@ export default function Composer({ placeholder, disabled, onSend, chatId, draftT
 
       runningCount += 1
       runningSize += file.size
-      toAdd.push({ clientId, file, filename: file.name, size: file.size, status: 'uploading' })
+      // Videos are checked for length before uploading, so a long recording
+      // fails immediately instead of after a slow upload.
+      toAdd.push({ clientId, file, filename: file.name, size: file.size, status: isVideoFile(file) ? 'checking' : 'uploading' })
     }
 
     setAttachments((prev) => [...prev, ...toAdd])
-    toAdd.filter((a) => a.status === 'uploading').forEach((a) => uploadOne(a.clientId, a.file))
+    toAdd.forEach((a) => {
+      if (a.status === 'uploading') uploadOne(a.clientId, a.file)
+      else if (a.status === 'checking') {
+        readVideoDuration(a.file).then((seconds) => {
+          if (seconds !== null && seconds > MAX_VIDEO_SECONDS) {
+            updateAttachment(a.clientId, { status: 'error', error: `Videos must be ${MAX_VIDEO_SECONDS} seconds or shorter.` })
+          } else {
+            updateAttachment(a.clientId, { status: 'uploading' })
+            uploadOne(a.clientId, a.file)
+          }
+        })
+      }
+    })
   }
 
   const removeAttachment = (clientId) => {
@@ -181,7 +224,7 @@ export default function Composer({ placeholder, disabled, onSend, chatId, draftT
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/png,image/jpeg,image/jpg,image/webp"
+          accept={ACCEPT_ATTRIBUTE}
           multiple
           disabled={disabled}
           onChange={(event) => {
@@ -194,7 +237,7 @@ export default function Composer({ placeholder, disabled, onSend, chatId, draftT
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled}
-          aria-label="Attach an image"
+          aria-label="Attach a file"
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-ink-faint transition-colors hover:bg-surface-sunken hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">

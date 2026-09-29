@@ -2,10 +2,12 @@ const express = require("express");
 const mongoose = require("mongoose");
 const ChatSession = require("../models/ChatSession");
 const ChatMessage = require("../models/ChatMessage");
+const TemporaryConversation = require("../models/TemporaryConversation");
 const { findOrCreateFromFirebaseClaims } = require("../services/users/userService");
 
-const createChatRouter = ({ authMiddleware, getUser = findOrCreateFromFirebaseClaims, chatSessionModel = ChatSession, chatMessageModel = ChatMessage } = {}) => {
+const createChatRouter = ({ authMiddleware, getUser = findOrCreateFromFirebaseClaims, chatSessionModel = ChatSession, chatMessageModel = ChatMessage, temporaryConversationModel = TemporaryConversation } = {}) => {
   const router = express.Router();
+  router.use(express.json({ limit: "1mb" }));
   const requireAuth = authMiddleware || require("../middleware/auth");
   router.use(requireAuth);
   const ownerChat = async (id, userId) => mongoose.isValidObjectId(id) ? chatSessionModel.findOne({ _id: id, user: userId }) : null;
@@ -49,6 +51,21 @@ const createChatRouter = ({ authMiddleware, getUser = findOrCreateFromFirebaseCl
     } catch (error) { next(error); }
   });
 
+  // Deleting a chat removes its own messages and its server-trusted Gmail/
+  // Calendar context (the TemporaryConversation record keyed by this chat's
+  // id) along with it — nothing usable is left behind for that conversation.
+  router.delete("/:chatId", async (req, res, next) => {
+    try {
+      const user = await getUser(req.user);
+      const chat = await ownerChat(req.params.chatId, user._id);
+      if (!chat) return res.status(404).json({ success: false, error: { code: "CHAT_NOT_FOUND", message: "Chat not found." } });
+      await chatMessageModel.deleteMany({ chat: chat._id, user: user._id });
+      await chatSessionModel.deleteOne({ _id: chat._id, user: user._id });
+      await temporaryConversationModel.deleteOne({ conversationId: String(chat._id), user: user._id }).catch(() => {});
+      res.json({ success: true, id: String(chat._id) });
+    } catch (error) { next(error); }
+  });
+
   router.post("/:chatId/messages", async (req, res, next) => {
     try {
       const user = await getUser(req.user);
@@ -89,7 +106,7 @@ const sanitizeChatMetadata = (role, value) => {
     size: Number.isInteger(item?.size) ? item.size : undefined,
   })) };
   const permitted = {};
-  for (const key of ["kind", "action", "result", "candidates", "selectedIdentity", "selectedConversation", "message"]) {
+  for (const key of ["kind", "action", "result", "candidates", "selectedIdentity", "selectedConversation", "message", "options", "summary"]) {
     if (key in value) permitted[key] = stripUnsafeMetadata(value[key]);
   }
   const encoded = JSON.stringify(permitted);

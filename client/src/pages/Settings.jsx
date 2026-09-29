@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   disconnectGoogle,
+  fetchMe,
   fetchPermissions,
   getGoogleConnectUrl,
   revokePermission,
+  updateCountry,
 } from '../api/nomiClient'
 import { friendlyPermission } from '../utils/actionLabels'
 import { summarizeGoogleScopes } from '../utils/googleScopes'
@@ -57,6 +59,38 @@ export default function Settings() {
   const [busy, setBusy] = useState(false)
   const [connectError, setConnectError] = useState(null)
   const [showComingSoon, setShowComingSoon] = useState(false)
+
+  const [country, setCountry] = useState(null)
+  const [meLoading, setMeLoading] = useState(true)
+  const [editingCountry, setEditingCountry] = useState(false)
+  const [countryInput, setCountryInput] = useState('')
+  const [countryError, setCountryError] = useState('')
+  const [savingCountry, setSavingCountry] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchMe()
+      .then((data) => { if (!cancelled) setCountry(data.user?.country || null) })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setMeLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  const handleSaveCountry = async (event) => {
+    event.preventDefault()
+    if (!countryInput.trim()) { setCountryError('Enter a country.'); return }
+    setCountryError('')
+    setSavingCountry(true)
+    try {
+      await updateCountry(countryInput.trim())
+      setCountry(countryInput.trim())
+      setEditingCountry(false)
+    } catch {
+      setCountryError("NOMI didn't recognize that country. Try the full name, e.g. \"Nigeria\".")
+    } finally {
+      setSavingCountry(false)
+    }
+  }
 
   const loadPermissions = async () => {
     setPermissionsError(null)
@@ -153,6 +187,54 @@ export default function Settings() {
               Log out
             </button>
           </div>
+        </Section>
+
+        {/* Location & time zone */}
+        <Section
+          title="Location & time zone"
+          description="Meetings NOMI creates for you default to this country's time zone unless you say otherwise."
+        >
+          {meLoading && <p className="text-sm text-ink-faint">Loading…</p>}
+          {!meLoading && !editingCountry && (
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-ink">{country || 'Not set'}</p>
+              <button
+                type="button"
+                onClick={() => { setCountryInput(country || ''); setCountryError(''); setEditingCountry(true) }}
+                className="shrink-0 rounded-lg border border-line-strong px-3 py-1.5 text-sm font-medium text-ink-soft transition-colors hover:border-nomi-orange hover:text-nomi-orange"
+              >
+                {country ? 'Change' : 'Set country'}
+              </button>
+            </div>
+          )}
+          {!meLoading && editingCountry && (
+            <form onSubmit={handleSaveCountry} className="flex flex-wrap items-start gap-2">
+              <input
+                type="text"
+                value={countryInput}
+                onChange={(e) => setCountryInput(e.target.value)}
+                placeholder="e.g. Nigeria"
+                autoComplete="country-name"
+                autoFocus
+                className="min-w-0 flex-1 rounded-xl border border-line bg-surface px-3.5 py-2.5 text-[15px] text-ink placeholder:text-ink-faint focus:border-nomi-orange focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={savingCountry}
+                className="rounded-xl bg-nomi-orange px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-nomi-orange-dark disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {savingCountry ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setEditingCountry(false); setCountryError('') }}
+                className="rounded-xl px-3 py-2.5 text-sm font-medium text-ink-faint hover:text-ink"
+              >
+                Cancel
+              </button>
+            </form>
+          )}
+          {countryError && <p className="mt-2 text-xs text-danger">{countryError}</p>}
         </Section>
 
         {/* Connected Accounts */}

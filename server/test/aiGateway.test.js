@@ -53,6 +53,18 @@ test("person search phrases are deterministic Gmail search intents without calli
   }
 });
 
+test("checking unread or commonly misspelled unred messages deterministically searches Gmail", async () => {
+  const phrases = ["check for my unred messages", "Find my unread emails", "show unread mail"];
+  const gateway = createAIGateway({ providerName: "groq", adapters: { groq: { generateIntent: async () => { throw new Error("planner should not run"); } } } });
+  for (const userRequest of phrases) {
+    const result = await gateway.generateIntent({ safeInput: { userRequest, untrustedRetrievedContent: [] } });
+    assert.equal(result.status, "proposed", userRequest);
+    assert.equal(result.intent.action, "gmail.search", userRequest);
+    assert.equal(result.intent.parameters.query, "is:unread", userRequest);
+    assert.equal(result.intent.parameters.maxResults, 50, userRequest);
+  }
+});
+
 test("person search does not reclassify arbitrary email queries as contact searches", async () => {
   let called = false;
   const gateway = createAIGateway({ providerName: "groq", adapters: { groq: { generateIntent: async () => { called = true; return { action: "gmail.search", parameters: fullParams({ query: "is:unread" }) }; } } } });

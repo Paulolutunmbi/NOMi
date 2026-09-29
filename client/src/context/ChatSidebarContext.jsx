@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createChat, listAllChats } from '../api/nomiClient'
+import { createChat, deleteChat, listAllChats } from '../api/nomiClient'
 
 const ChatSidebarContext = createContext(null)
 
@@ -60,9 +60,27 @@ export function ChatSidebarProvider({ children }) {
     navigate(`/app/chat/${targetChatId}`)
   }, [navigate])
 
+  // Optimistically drops the chat from the list, then confirms with the
+  // server. If it was the one currently open, sends the user back to a
+  // fresh chat rather than leaving them on a now-deleted conversation.
+  const removeChat = useCallback(async (targetChatId) => {
+    const previous = chats
+    setChats((prev) => prev.filter((item) => item.id !== targetChatId))
+    try {
+      await deleteChat(targetChatId)
+      if (selectedChatId === targetChatId) {
+        navigate('/app', { replace: true })
+      }
+      return true
+    } catch {
+      setChats(previous)
+      return false
+    }
+  }, [chats, navigate, selectedChatId])
+
   return (
     <ChatSidebarContext.Provider
-      value={{ chats, listError, selectedChatId, setSelectedChatId, newChat, goToChat, mobileOpen, setMobileOpen, refreshChats }}
+      value={{ chats, listError, selectedChatId, setSelectedChatId, newChat, goToChat, removeChat, mobileOpen, setMobileOpen, refreshChats }}
     >
       {children}
     </ChatSidebarContext.Provider>

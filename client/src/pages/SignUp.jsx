@@ -2,10 +2,12 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import AuthCard, { AuthDivider, AuthError, AuthField, GoogleButton } from '../components/AuthCard'
 import { friendlyAuthError, registerWithEmailAndPassword, signInWithGoogle } from '../services/auth'
+import { isCountryRecognized, updateCountry } from '../api/nomiClient'
 
 export default function SignUp() {
   const navigate = useNavigate()
   const [name, setName] = useState('')
+  const [country, setCountry] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -24,10 +26,24 @@ export default function SignUp() {
       setError('Passwords do not match.')
       return
     }
+    if (!country.trim()) {
+      setError('Enter your country.')
+      return
+    }
 
     setIsSubmitting(true)
     try {
+      // Catch a mistyped country now: it decides the time zone of every
+      // event NOMI creates, so it shouldn't silently fall back to a default.
+      if (!(await isCountryRecognized(country.trim()))) {
+        setError("NOMI doesn't recognize that country. Try the full name, e.g. \"Nigeria\".")
+        setIsSubmitting(false)
+        return
+      }
       await registerWithEmailAndPassword(email.trim(), password, name.trim())
+      // Best-effort: this sets the default time zone for calendar events.
+      // If it fails, Onboarding asks again before the workspace opens.
+      await updateCountry(country.trim()).catch(() => {})
       navigate('/', { replace: true })
     } catch (submitError) {
       setError(friendlyAuthError(submitError))
@@ -81,6 +97,16 @@ export default function SignUp() {
           autoComplete="email"
           required
         />
+        <AuthField
+          label="Country"
+          type="text"
+          value={country}
+          onChange={(e) => setCountry(e.target.value)}
+          autoComplete="country-name"
+          placeholder="e.g. Nigeria"
+          required
+        />
+        <p className="-mt-2 text-xs text-ink-faint">Used to default the time zone for meetings NOMI creates for you.</p>
         <AuthField
           label="Password"
           type="password"

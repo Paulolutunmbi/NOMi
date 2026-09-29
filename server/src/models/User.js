@@ -7,6 +7,11 @@ const userSchema = new mongoose.Schema(
     displayName: { type: String, default: null, trim: true },
     photoUrl: { type: String, default: null, trim: true },
     lastAuthenticatedAt: { type: Date, default: Date.now },
+    // What the user typed at sign-up (or later changed in Settings), e.g.
+    // "Nigeria" or "Kenya" — kept as-is for display. timeZone is the IANA
+    // zone resolved from it, used to default new calendar events.
+    country: { type: String, default: null, trim: true },
+    timeZone: { type: String, default: null, trim: true },
   },
   { timestamps: true }
 );

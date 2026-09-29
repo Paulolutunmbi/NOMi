@@ -3,6 +3,7 @@ const { resolveIdentity } = require("../identity/identityResolver");
 const { isSelfRecipientMarker, generateSubjectFromBody } = require("../ai/intentValidator");
 const { getAttachmentsForUser, removeAttachments } = require("../attachments/attachmentService");
 const { checkEmailDomain: checkEmailDomainDefault } = require("../validation/emailDomainCheck");
+const { timeZoneFromText, describeTimeZone, stripOffset, addHoursWallClock } = require("../calendar/timeZoneResolver");
 
 const REPLY_ACTIONS = new Set(["gmail.draft.reply", "gmail.send.reply"]);
 const DRAFT_ACTIONS = new Set(["gmail.draft", "gmail.draft.reply"]);
@@ -278,6 +279,19 @@ const resolveAttendees = (attendeesValue, { message, user }) => {
 const replyActionFor = (compoundAction) => {
   if (compoundAction === "gmail.search_then_send_reply") return "gmail.send.reply";
   return "gmail.draft.reply"; // search_then_reply and search_then_draft_reply both draft
+};
+
+// Fallback when a user has no country set yet in their profile.
+const DEFAULT_TIME_ZONE = "Africa/Lagos";
+
+// "Nigeria time" when the zone is the one from the user's own country,
+// otherwise the zone's own name, e.g. "Nairobi (EAT, UTC+3)".
+const titleCase = (value) => String(value || "").trim().replace(/\b([a-z])/g, (m) => m.toUpperCase());
+const timeZoneNoteFor = ({ timeZone, user, stated, attendees }) => {
+  const usesOwnCountry = !stated && user?.country && user?.timeZone && user.timeZone === timeZone;
+  const place = usesOwnCountry ? `${titleCase(user.country)} time` : describeTimeZone(timeZone);
+  const emails = (Array.isArray(attendees) ? attendees : []).map((entry) => entry?.email).filter(Boolean);
+  return `Event set to ${place}${emails.length ? ` with ${emails.join(", ")}` : ""}`;
 };
 
 const createActionOrchestrator = ({ contextService, actionExecutor = executeAction, resolve = resolveIdentity, checkEmailDomain = checkEmailDomainDefault } = {}) => {
@@ -630,6 +644,28 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
         }
       }
     }
+    // Time zone: the model only proposes a wall-clock time. If the user
+    // named one in this message ("10am WAT", "in Kenya time") that wins;
+    // otherwise this defaults to the country the user set at sign-up (or in
+    // Settings), falling back to Nigeria time for an account with none set.
+    // A default use is flagged with timeZoneDefaulted so the reply can tell
+    // the user what zone was used and that they can just say a different
+    // one, or a country, to change it.
+    let chosenTimeZone = null;
+    let timeZoneDefaulted = false;
+    let timeZoneStated = false;
+    const timeIsChanging = intent.action === "calendar.update" && Boolean(intent.parameters.startDateTime || intent.parameters.endDateTime);
+    if (intent.action === "calendar.create" || timeIsChanging) {
+      const stated = timeZoneFromText(message);
+      chosenTimeZone = stated || user.timeZone || DEFAULT_TIME_ZONE;
+      timeZoneDefaulted = !stated;
+      const p = intent.parameters;
+      if (p.startDateTime) p.startDateTime = stripOffset(p.startDateTime);
+      // On create a missing end defaults to +1h. On update a missing end is
+      // left null so the provider keeps the meeting's existing length.
+      p.endDateTime = p.endDateTime ? stripOffset(p.endDateTime) : (intent.action === "calendar.create" ? (addHoursWallClock(p.startDateTime, 1) || null) : null);
+      p.timeZone = chosenTimeZone;
+    }
     const target = CALENDAR_EVENT_ACTIONS.has(intent.action)
       ? { type: "calendar_event", id: intent.parameters.eventId }
       : { type: "calendar", id: null };
@@ -675,7 +711,10 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       const remainingIds = (activeConversation.calendarEventIds || []).filter((id) => id !== intent.parameters.eventId);
       await contextService.update({ userId: user._id, conversationId, calendarEventIds: remainingIds, calendarCandidates: remainingCandidates, trustedCalendarEvent: null }).catch(() => {});
     }
-    return { status: "success", action: intent.action, result: safeResult(execution.result) };
+    return { status: "success", action: intent.action, result: { ...safeResult(execution.result), ...(chosenTimeZone ? {
+      timeZone: chosenTimeZone, timeZoneLabel: describeTimeZone(chosenTimeZone), timeZoneDefaulted,
+      timeZoneNote: timeZoneNoteFor({ timeZone: chosenTimeZone, user, stated: !timeZoneDefaulted, attendees: execution.result?.event?.attendees }),
+    } : {}) } };
   };
 
   // Content-only revision of the currently trusted draft ("make it more
@@ -869,6 +908,19 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     await contextService.update({ userId: user._id, conversationId, gmailMessageIds: updatedIds, gmailCandidates: updatedCandidates, retrievedContext });
   };
 
+  // Best-effort side effect of actually opening a message, mirroring a
+  // normal email client. This never blocks or changes the gmail.read result:
+  // if gmail.markRead isn't already a granted permission, actionExecutor
+  // just returns "approval_required" and we do nothing — a read should never
+  // surface an unrelated permission prompt for a side effect the user didn't
+  // directly ask about, and a failure here should never surface as a read error.
+  const autoMarkMessageRead = async ({ user, conversationId, messageId }) => {
+    if (!messageId) return;
+    try {
+      await actionExecutor({ user, provider: "google", action: "gmail.markRead", payload: { messageIds: [messageId] }, target: { type: "gmail_message", id: null }, conversationId });
+    } catch { /* best-effort only */ }
+  };
+
   const execute = async ({ user, conversationId, message, proposal, conversation, approval, attachmentIds }) => {
     let activeConversation = conversation || await contextService.getActive({ userId: user._id, conversationId });
     if (!activeConversation) activeConversation = await contextService.create({ userId: user._id, conversationId });
@@ -905,6 +957,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       const execution = await actionExecutor({ user, provider: "google", action: "gmail.read", payload: { messageId: id }, target: { type: "gmail_message", id }, approval, conversationId });
       if (execution.status !== "success") return { status: execution.status, action: "gmail.read", pendingAction: execution.pendingAction };
       if (execution.result?.message) await persistReadMessageContext({ user, conversationId, activeConversation, message: execution.result.message });
+      await autoMarkMessageRead({ user, conversationId, messageId: id });
       return { status: "success", action: "gmail.read", result: safeResult(execution.result) };
     }
 
@@ -979,9 +1032,22 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     // are already server-trusted in this conversation (from a prior
     // search/read), the same trust boundary MESSAGE_ACTIONS enforces below.
     if (intent.action === "gmail.markRead") {
-      const trustedIds = (Array.isArray(activeConversation.gmailMessageIds) ? activeConversation.gmailMessageIds : []).slice(0, 50);
-      if (!trustedIds.length) return { status: "rejected", reason: "no_trusted_messages" };
-      const execution = await actionExecutor({ user, provider: "google", action: intent.action, payload: { messageIds: trustedIds }, target: { type: "gmail_message", id: null }, approval, conversationId });
+      const requested = Number.isInteger(intent.parameters?.maxResults) ? Math.min(Math.max(intent.parameters.maxResults, 1), 50) : 50;
+      let trustedIds = (Array.isArray(activeConversation.gmailMessageIds) ? activeConversation.gmailMessageIds : []).slice(0, 50);
+      if (!trustedIds.length) {
+        // Nothing listed yet in this conversation: find the unread messages
+        // server-side instead of failing, so "mark my last 3 unread as read"
+        // works in one step. The IDs come from Gmail, never from the model.
+        const searchExecution = await actionExecutor({ user, provider: "google", action: "gmail.search", payload: { query: "is:unread", maxResults: requested }, target: { type: "gmail_search", id: null }, approval, conversationId });
+        if (searchExecution.status !== "success") return { status: searchExecution.status, action: "gmail.search", pendingAction: searchExecution.pendingAction };
+        const found = normalizedCandidates(searchExecution.result);
+        if (!found.length) return { status: "not_found", action: intent.action, message: "You have no unread emails to mark as read." };
+        trustedIds = found.map(({ id }) => id);
+        await contextService.update({ userId: user._id, conversationId, gmailMessageIds: trustedIds, gmailCandidates: found, retrievedContext: found.map(({ id, ...candidate }) => ({ source: "gmail", content: JSON.stringify(candidate) })) });
+      }
+      // Search results are newest-first, so "the last N" is the first N.
+      const idsToMark = trustedIds.slice(0, requested);
+      const execution = await actionExecutor({ user, provider: "google", action: intent.action, payload: { messageIds: idsToMark }, target: { type: "gmail_message", id: null }, approval, conversationId });
       if (execution.status !== "success") return { status: execution.status, action: intent.action, pendingAction: execution.pendingAction };
       return { status: "success", action: intent.action, result: safeResult(execution.result) };
     }
@@ -1083,6 +1149,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       await contextService.update({ userId: user._id, conversationId, gmailMessageIds: candidates.map(({ id }) => id), gmailCandidates: candidates, retrievedContext });
     } else if (intent.action === "gmail.read" && execution.result?.message) {
       await persistReadMessageContext({ user, conversationId, activeConversation, message: execution.result.message });
+      await autoMarkMessageRead({ user, conversationId, messageId: execution.result.message.id });
     }
 
     // Persist trusted draft context for follow-up "send it".

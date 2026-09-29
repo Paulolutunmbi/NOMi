@@ -13,6 +13,11 @@ const ChatSession = require("../models/ChatSession");
 const { extractExplicitRecipientEmail } = require("../services/ai/intentSafetyPolicy");
 
 const validConversationId = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+const GOOGLE_ERROR_RESPONSES = {
+  google_reconnect_required: { status: 401, message: "Your Google connection expired. Reconnect Google in Settings." },
+  google_insufficient_scope: { status: 403, message: "NOMI needs an extra Google permission for this. Disconnect and reconnect Google in Settings, then try again." },
+  google_rate_limited: { status: 429, message: "Google is busy right now. Try again in a moment." },
+};
 const fail = (res, status, code, message) => res.status(status).json({ success: false, error: { code, message } });
 const ACTION_VERBS = /\b(craft|compose|draft|send|write|message|reply|respond|response|find|search|look\s+up|locate|read|check)\b/i;
 const looksLikeAmbiguityResolution = (message) => {
@@ -71,8 +76,14 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
         && ["identity_selection", "conversation_selection", "no_history"].includes(conversation.pendingInteraction.stage);
       const isTrustedSend = conversation.trustedDraft && SEND_FOLLOWUP.test(message);
       const isCalendarSelection = /^calendar_select:\d+$/.test(message) && Array.isArray(conversation.calendarCandidates);
+      // Tapping a listed email, or answering the time zone question, is fully
+      // deterministic: the orchestrator resolves it against server-held state.
+      // Sending these through the AI model added a slow, rate-limit-prone call
+      // (and a place to fail silently) for no benefit.
+      const isGmailSelection = /^gmail_select:\d+$/.test(message);
+      const isTimeZoneAnswer = /^timezone_(?:select|text):/.test(message);
 
-      if (isSelectionStage || isTrustedSend || isCalendarSelection) {
+      if (isSelectionStage || isTrustedSend || isCalendarSelection || isGmailSelection || isTimeZoneAnswer) {
         const outcome = await actionOrchestrator.execute({ user, conversationId, message, conversation, proposal: null, approval, attachmentIds });
         return recordOutcome(outcome);
       }
@@ -114,6 +125,11 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
         trustedConversationContext: { gmailMessageIds: conversation.gmailMessageIds || [], trustedGmailPerson: conversation.trustedGmailPerson || null, calendarEventIds: conversation.calendarEventIds || [], trustedCalendarEvent: conversation.trustedCalendarEvent || null, chatHistory: conversation.messages || [],
           rollingSummary: persistentChat?.summary || null,
           currentDraftBody: conversation.trustedDraft?.body || null } });
+      if (planned.status !== "proposed") {
+        // These used to fail with no log line at all, which made a provider
+        // outage or rate limit look like a mystery "server error".
+        console.warn(`[AI DEBUG] intent planning did not produce a proposal: status=${planned.status} reason=${planned.reason || "unknown"} provider=${planned.provider || "none"}`);
+      }
       if (planned.status !== "proposed") return fail(res, planned.status === "invalid" ? 422 : 503, planned.status === "invalid" ? "AI_INTENT_INVALID" : "AI_PROVIDER_ERROR", "The request could not be safely executed.");
       const intent = restorePlaceholders(planned.intent, safe.mappings);
       // Keep an explicitly typed recipient deterministic. The planner can
@@ -141,7 +157,16 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
       }
       const outcome = await actionOrchestrator.execute({ user, conversationId, message, conversation, proposal: intent, approval, attachmentIds });
       return recordOutcome(outcome);
-    } catch (error) { return next(error); }
+    } catch (error) {
+      // Known Google problems get a specific, actionable answer instead of a
+      // bare 500. Anything else still goes to the shared error handler.
+      const known = GOOGLE_ERROR_RESPONSES[error?.code];
+      if (known) {
+        console.warn(`[AI DEBUG] action failed with ${error.code}`);
+        return fail(res, known.status, error.code.toUpperCase(), known.message);
+      }
+      return next(error);
+    }
   });
   router.post("/send-approval", requireAuth, async (req, res, next) => {
     const { actionId, conversationId, decision } = req.body || {};

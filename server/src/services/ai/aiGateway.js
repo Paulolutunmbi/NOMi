@@ -35,6 +35,23 @@ const personSearchQuery = (message) => {
   return cleaned;
 };
 
+// A short, unambiguous request to check unread mail does not need model
+// interpretation. Keep the matcher narrow so it cannot swallow other email
+// tasks (drafting, replying, or marking messages read).
+const unreadMailSearchRequested = (message) => {
+  const source = String(message || "").trim();
+  if (!/\b(?:check|find|search|look\s+(?:for|at)|show|list)\b/i.test(source)) return false;
+  if (!/\b(?:unread|unred)\b/i.test(source)) return false;
+  if (!/\b(?:emails?|messages?|mail)\b/i.test(source)) return false;
+  // Only take this shortcut for a plain "show me what's unread" request. If
+  // the message also names a date range, sender, or other criteria, that
+  // needs the model to translate it into real Gmail query syntax — firing
+  // the shortcut here would silently drop that criteria and hand back every
+  // unread message instead of the ones actually asked for.
+  if (/\b(?:from|about|regarding|subject|last|this|next|today|yesterday|tomorrow|week|weeks|month|months|day|days|hour|hours|between|before|after|since)\b/i.test(source)) return false;
+  return true;
+};
+
 const defaultClarificationIntent = () => ({
   action: "clarification",
   parameters: {
@@ -71,6 +88,16 @@ const createAIGateway = ({ providerName = process.env.AI_PROVIDER, adapters = {}
         parameters: {
           body: null, maxResults: 50, messageId: null,
           query: `{from:${requestedPerson.toLowerCase()} to:${requestedPerson.toLowerCase()}}`, recipient: null, subject: null,
+          eventId: null, summary: null, description: null, location: null,
+          startDateTime: null, endDateTime: null, timeZone: null, attendees: null, timeMin: null, timeMax: null, addMeet: null,
+        },
+      }, placeholderMappings: prepared.mappings };
+    }
+    if (unreadMailSearchRequested(prompt.userRequest)) {
+      return { status: "proposed", provider: providerName, intent: {
+        action: "gmail.search",
+        parameters: {
+          body: null, maxResults: 50, messageId: null, query: "is:unread", recipient: null, subject: null,
           eventId: null, summary: null, description: null, location: null,
           startDateTime: null, endDateTime: null, timeZone: null, attendees: null, timeMin: null, timeMax: null, addMeet: null,
         },

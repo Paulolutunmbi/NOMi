@@ -1486,7 +1486,7 @@ test("calendar.update/delete succeed against a server-trusted eventId", async ()
 });
 
 test("calendar.create only accepts an attendee address the user actually typed, never one invented by the model", async () => {
-  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [] };
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [], userTimeZone: "UTC" };
   const calls = [];
   const orchestrator = createActionOrchestrator({
     contextService: conversationService(record),
@@ -1511,7 +1511,7 @@ test("calendar.create only accepts an attendee address the user actually typed, 
 });
 
 test("calendar.create resolves the self-recipient marker to the authenticated user's own email, never the model's guess", async () => {
-  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [] };
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [] , userTimeZone: "UTC" };
   const calls = [];
   const orchestrator = createActionOrchestrator({
     contextService: conversationService(record),
@@ -1559,14 +1559,41 @@ test("gmail.markRead only acts on server-trusted message IDs, never model-suppli
   assert.equal(calls[0].payload.messageId, undefined);
 });
 
-test("gmail.markRead is rejected when there are no trusted messages in context", async () => {
+test("gmail.markRead with nothing listed yet finds the unread messages itself and marks only the requested count", async () => {
   const record = { gmailMessageIds: [], gmailCandidates: [], retrievedContext: [] };
-  const executor = async () => { throw new Error("should not execute"); };
+  const calls = [];
+  const executor = async (input) => {
+    calls.push(input);
+    if (input.action === "gmail.search") return { status: "success", result: { messages: [
+      { id: "u1", from: { name: "A", email: "a@example.com" }, subject: "1" },
+      { id: "u2", from: { name: "B", email: "b@example.com" }, subject: "2" },
+      { id: "u3", from: { name: "C", email: "c@example.com" }, subject: "3" },
+    ] } };
+    return { status: "success", result: { markedRead: input.payload.messageIds.length } };
+  };
   const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: executor });
-  const proposal = { action: "gmail.markRead", parameters: params({}) };
-  const result = await orchestrator.execute({ user, conversationId: "c", message: "mark them as read", proposal });
-  assert.equal(result.status, "rejected");
-  assert.equal(result.reason, "no_trusted_messages");
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "mark my last three unread messages as read", proposal: { action: "gmail.markRead", parameters: params({ maxResults: 3 }) } });
+  assert.equal(result.status, "success");
+  assert.equal(calls[0].action, "gmail.search");
+  assert.equal(calls[0].payload.query, "is:unread");
+  assert.equal(calls[0].payload.maxResults, 3);
+  assert.deepEqual(calls[1].payload.messageIds, ["u1", "u2", "u3"]);
+});
+
+test("gmail.markRead respects a requested count against already-trusted messages", async () => {
+  const record = { gmailMessageIds: ["a", "b", "c", "d"], gmailCandidates: [], retrievedContext: [] };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async (input) => { calls.push(input); return { status: "success", result: {} }; } });
+  await orchestrator.execute({ user, conversationId: "c", message: "mark the last 2 as read", proposal: { action: "gmail.markRead", parameters: params({ maxResults: 2 }) } });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].payload.messageIds, ["a", "b"]);
+});
+
+test("gmail.markRead reports cleanly when there is nothing unread", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], retrievedContext: [] };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async () => ({ status: "success", result: { messages: [] } }) });
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "mark them as read", proposal: { action: "gmail.markRead", parameters: params({}) } });
+  assert.equal(result.status, "not_found");
 });
 
 test("gmail.draft with a likely-typo domain is flagged instead of drafted, and never touches the executor", async () => {
@@ -1642,6 +1669,49 @@ test("gmail_select:N reads the server-trusted ID at that position, never a clien
   assert.equal(record.gmailMessageIds[0], "trusted-2");
 });
 
+test("opening a message via gmail_select:N also fires a best-effort gmail.markRead for it", async () => {
+  const record = { gmailMessageIds: ["trusted-1", "trusted-2"], gmailCandidates: [], retrievedContext: [] };
+  const calls = [];
+  const executor = async (input) => {
+    calls.push(input);
+    if (input.action === "gmail.markRead") return { status: "success", result: { markedRead: 1 } };
+    return { status: "success", result: { message: { id: input.payload.messageId, sender: "Aminat Bello <aminat@example.com>", subject: "Kata", snippet: "Status", date: "2026-01-01", body: "Full body", from: { name: "Aminat Bello", email: "aminat@example.com" } } } };
+  };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: executor });
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "gmail_select:2" });
+  assert.equal(result.status, "success");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].action, "gmail.read");
+  assert.equal(calls[1].action, "gmail.markRead");
+  assert.deepEqual(calls[1].payload.messageIds, ["trusted-2"]);
+});
+
+test("a direct gmail.read proposal also fires a best-effort gmail.markRead for the opened message", async () => {
+  const record = { gmailMessageIds: ["trusted-1"], gmailCandidates: [], retrievedContext: [] };
+  const calls = [];
+  const executor = async (input) => {
+    calls.push(input);
+    if (input.action === "gmail.markRead") return { status: "success", result: { markedRead: 1 } };
+    return { status: "success", result: { message: { id: "trusted-1", sender: "Aminat Bello <aminat@example.com>", subject: "Kata", snippet: "Status", date: "2026-01-01", body: "Full body", from: { name: "Aminat Bello", email: "aminat@example.com" } } } };
+  };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: executor });
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "Read this", proposal: { action: "gmail.read", parameters: params({ messageId: "trusted-1" }) } });
+  assert.equal(result.status, "success");
+  assert.equal(calls.some((call) => call.action === "gmail.markRead" && call.payload.messageIds?.[0] === "trusted-1"), true);
+});
+
+test("gmail.read still succeeds even when the auto-markRead side effect isn't approved or fails", async () => {
+  const record = { gmailMessageIds: ["trusted-1"], gmailCandidates: [], retrievedContext: [] };
+  const executor = async (input) => {
+    if (input.action === "gmail.markRead") return { status: "approval_required" };
+    return { status: "success", result: { message: { id: "trusted-1", sender: "Aminat Bello <aminat@example.com>", subject: "Kata", snippet: "Status", date: "2026-01-01", body: "Full body", from: { name: "Aminat Bello", email: "aminat@example.com" } } } };
+  };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: executor });
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "gmail_select:1" });
+  assert.equal(result.status, "success");
+  assert.equal(result.result.message.body, "Full body");
+});
+
 test("gmail_select:N is rejected for an out-of-range position and never calls the executor", async () => {
   const record = { gmailMessageIds: ["trusted-1"], gmailCandidates: [], retrievedContext: [] };
   const executor = async () => { throw new Error("should not execute"); };
@@ -1658,4 +1728,155 @@ test("gmail_select:N still requires gmail.read permission approval, just like an
   const result = await orchestrator.execute({ user, conversationId: "c", message: "gmail_select:1" });
   assert.equal(result.status, "approval_required");
   assert.equal(result.action, "gmail.read");
+});
+
+const calendarEventResult = { status: "success", result: { event: { id: "evt-1", summary: "Meeting", start: "2026-09-29T10:00:00+01:00", attendees: [{ email: "paul@example.com" }] } } };
+const meetingProposal = () => ({ action: "calendar.create", parameters: params({ summary: "Meeting", startDateTime: "2026-09-29T10:00:00Z", endDateTime: null, attendees: "paul@example.com", addMeet: true }) });
+
+test("calendar.create with no stated time zone books immediately using the user's own country time zone", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [] };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async (input) => { calls.push(input); return calendarEventResult; } });
+  const kenyanUser = { ...user, timeZone: "Africa/Nairobi" };
+  const result = await orchestrator.execute({ user: kenyanUser, conversationId: "c", message: "create a meeting with paul@example.com tomorrow by 10 am", proposal: meetingProposal() });
+  assert.equal(result.status, "success");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].payload.startDateTime, "2026-09-29T10:00:00");
+  assert.equal(calls[0].payload.endDateTime, "2026-09-29T11:00:00");
+  assert.equal(calls[0].payload.timeZone, "Africa/Nairobi");
+  assert.equal(result.result.timeZone, "Africa/Nairobi");
+  assert.equal(result.result.timeZoneDefaulted, true);
+});
+
+test("a user with no country set yet defaults to Nigeria time, not UTC", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [] };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async (input) => { calls.push(input); return calendarEventResult; } });
+  const result = await orchestrator.execute({ user: { ...user, timeZone: null }, conversationId: "c", message: "create a meeting with paul@example.com tomorrow by 10 am", proposal: meetingProposal() });
+  assert.equal(result.status, "success");
+  assert.equal(calls[0].payload.timeZone, "Africa/Lagos");
+  assert.equal(result.result.timeZoneDefaulted, true);
+});
+
+test("a time zone stated in the request (10am WAT) overrides the user's own country default, with no default note", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [] };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async (input) => { calls.push(input); return calendarEventResult; } });
+  const result = await orchestrator.execute({ user: { ...user, timeZone: "Africa/Nairobi" }, conversationId: "c", message: "create a meeting with paul@example.com tomorrow at 10 am WAT", proposal: meetingProposal() });
+  assert.equal(result.status, "success");
+  assert.equal(calls[0].payload.timeZone, "Africa/Lagos");
+  assert.equal(result.result.timeZoneDefaulted, false);
+});
+
+test("gmail_select:N reads the server-trusted ID at that position, never a client-supplied one", async () => {
+  const record = { gmailMessageIds: ["trusted-1", "trusted-2"], gmailCandidates: [], retrievedContext: [] };
+  const calls = [];
+  const executor = async (input) => {
+    calls.push(input);
+    return { status: "success", result: { message: { id: input.payload.messageId, sender: "Aminat Bello <aminat@example.com>", subject: "Kata", snippet: "Status", date: "2026-01-01", body: "Full body", from: { name: "Aminat Bello", email: "aminat@example.com" } } } };
+  };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record) , actionExecutor: executor });
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "gmail_select:2" });
+  assert.equal(result.status, "success");
+  assert.equal(result.action, "gmail.read");
+  assert.equal(calls[0].payload.messageId, "trusted-2");
+  assert.equal(result.result.message.body, "Full body");
+  assert.equal(record.gmailMessageIds[0], "trusted-2");
+});
+
+test("opening a message via gmail_select:N also fires a best-effort gmail.markRead for it", async () => {
+  const record = { gmailMessageIds: ["trusted-1", "trusted-2"], gmailCandidates: [], retrievedContext: [] };
+  const calls = [];
+  const executor = async (input) => {
+    calls.push(input);
+    if (input.action === "gmail.markRead") return { status: "success", result: { markedRead: 1 } };
+    return { status: "success", result: { message: { id: input.payload.messageId, sender: "Aminat Bello <aminat@example.com>", subject: "Kata", snippet: "Status", date: "2026-01-01", body: "Full body", from: { name: "Aminat Bello", email: "aminat@example.com" } } } };
+  };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: executor });
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "gmail_select:2" });
+  assert.equal(result.status, "success");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].action, "gmail.read");
+  assert.equal(calls[1].action, "gmail.markRead");
+  assert.deepEqual(calls[1].payload.messageIds, ["trusted-2"]);
+});
+
+test("a direct gmail.read proposal also fires a best-effort gmail.markRead for the opened message", async () => {
+  const record = { gmailMessageIds: ["trusted-1"], gmailCandidates: [], retrievedContext: [] };
+  const calls = [];
+  const executor = async (input) => {
+    calls.push(input);
+    if (input.action === "gmail.markRead") return { status: "success", result: { markedRead: 1 } };
+    return { status: "success", result: { message: { id: "trusted-1", sender: "Aminat Bello <aminat@example.com>", subject: "Kata", snippet: "Status", date: "2026-01-01", body: "Full body", from: { name: "Aminat Bello", email: "aminat@example.com" } } } };
+  };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: executor });
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "Read this", proposal: { action: "gmail.read", parameters: params({ messageId: "trusted-1" }) } });
+  assert.equal(result.status, "success");
+  assert.equal(calls.some((call) => call.action === "gmail.markRead" && call.payload.messageIds?.[0] === "trusted-1"), true);
+});
+
+test("gmail.read still succeeds even when the auto-markRead side effect isn't approved or fails", async () => {
+  const record = { gmailMessageIds: ["trusted-1"], gmailCandidates: [], retrievedContext: [] };
+  const executor = async (input) => {
+    if (input.action === "gmail.markRead") return { status: "approval_required" };
+    return { status: "success", result: { message: { id: "trusted-1", sender: "Aminat Bello <aminat@example.com>", subject: "Kata", snippet: "Status", date: "2026-01-01", body: "Full body", from: { name: "Aminat Bello", email: "aminat@example.com" } } } };
+  };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: executor });
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "gmail_select:1" });
+  assert.equal(result.status, "success");
+  assert.equal(result.result.message.body, "Full body");
+});
+
+test("gmail_select:N is rejected for an out-of-range position and never calls the executor", async () => {
+  const record = { gmailMessageIds: ["trusted-1"], gmailCandidates: [], retrievedContext: [] };
+  const executor = async () => { throw new Error("should not execute"); };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: executor });
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "gmail_select:5" });
+  assert.equal(result.status, "rejected");
+  assert.equal(result.reason, "invalid_gmail_selection");
+});
+
+test("gmail_select:N still requires gmail.read permission approval, just like any other read", async () => {
+  const record = { gmailMessageIds: ["trusted-1"], gmailCandidates: [], retrievedContext: [] };
+  const executor = async () => ({ status: "approval_required", pendingAction: { id: "p1" } });
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: executor });
+  const result = await orchestrator.execute({ user, conversationId: "c", message: "gmail_select:1" });
+  assert.equal(result.status, "approval_required");
+  assert.equal(result.action, "gmail.read");
+});
+
+test("the confirmation note names the user's country time zone and lists every attendee", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [] };
+  const two = { status: "success", result: { event: { id: "evt-1", summary: "Meeting", attendees: [{ email: "a@gmail.com" }, { email: "b@gmail.com" }] } } };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async () => two });
+  const result = await orchestrator.execute({ user: { ...user, country: "nigeria", timeZone: "Africa/Lagos" }, conversationId: "c", message: "create a meeting with a@gmail.com and b@gmail.com tomorrow by 10 am", proposal: { action: "calendar.create", parameters: params({ summary: "Meeting", startDateTime: "2026-09-29T10:00:00Z", attendees: "a@gmail.com, b@gmail.com" }) } });
+  assert.equal(result.result.timeZoneNote, "Event set to Nigeria time with a@gmail.com, b@gmail.com");
+});
+
+test("a stated zone is named as that zone, not as the user's country", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: [], calendarCandidates: [] };
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async () => calendarEventResult });
+  const result = await orchestrator.execute({ user: { ...user, country: "Kenya", timeZone: "Africa/Nairobi" }, conversationId: "c", message: "create a meeting with paul@example.com tomorrow at 10 am WAT", proposal: meetingProposal() });
+  assert.match(result.result.timeZoneNote, /^Event set to Lagos \(UTC\+1\) with paul@example\.com$/);
+});
+
+test("rescheduling a trusted event applies the user's zone and leaves the end to the provider", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-1"], calendarCandidates: [], trustedCalendarEvent: { id: "evt-1" } };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async (input) => { calls.push(input); return calendarEventResult; } });
+  const result = await orchestrator.execute({ user: { ...user, country: "Nigeria", timeZone: "Africa/Lagos" }, conversationId: "c", message: "move it to 3pm", proposal: { action: "calendar.update", parameters: params({ eventId: "evt-1", startDateTime: "2026-09-30T15:00:00Z" }) } });
+  assert.equal(result.status, "success");
+  assert.equal(calls[0].payload.startDateTime, "2026-09-30T15:00:00");
+  assert.equal(calls[0].payload.timeZone, "Africa/Lagos");
+  assert.equal("endDateTime" in calls[0].payload, false);
+  assert.match(result.result.timeZoneNote, /^Event set to Nigeria time/);
+});
+
+test("changing only the end time still carries the time zone", async () => {
+  const record = { gmailMessageIds: [], gmailCandidates: [], calendarEventIds: ["evt-1"], calendarCandidates: [], trustedCalendarEvent: { id: "evt-1" } };
+  const calls = [];
+  const orchestrator = createActionOrchestrator({ contextService: conversationService(record), actionExecutor: async (input) => { calls.push(input); return calendarEventResult; } });
+  await orchestrator.execute({ user: { ...user, timeZone: "Africa/Lagos" }, conversationId: "c", message: "end it at 5pm", proposal: { action: "calendar.update", parameters: params({ eventId: "evt-1", endDateTime: "2026-09-29T17:00:00Z" }) } });
+  assert.equal(calls[0].payload.endDateTime, "2026-09-29T17:00:00");
+  assert.equal(calls[0].payload.timeZone, "Africa/Lagos");
 });

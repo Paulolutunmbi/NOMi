@@ -142,6 +142,20 @@ test("a calendar attendee address the model invents, never typed by the user, is
   assert.equal(result.reason, "untrusted_recipient_email");
 });
 
+test("a calendar attendee address is trusted when the model only ever sees its redacted placeholder", () => {
+  // This is the actual end-to-end path a real request takes: privacyService
+  // redacts the typed address to a placeholder before the model ever sees
+  // it, so the model's proposal carries the placeholder, not the address.
+  const message = "create a meeting with oreoluwapaul0110@gmail.com tomorrow by 10 am and add a google meet link to it, send a mail to him to notify him";
+  const mappings = { "[EMAIL_1]": { type: "EMAIL", value: "oreoluwapaul0110@gmail.com" } };
+  const redacted = "create a meeting with [EMAIL_1] tomorrow by 10 am and add a google meet link to it, send a mail to him to notify him";
+  const result = validateIntent(
+    { action: "calendar.create", parameters: parameters({ summary: "Meeting", startDateTime: "2026-01-01T10:00:00Z", endDateTime: "2026-01-01T11:00:00Z", attendees: "[EMAIL_1]" }) },
+    { recipientPlaceholders: explicitlyRequestedRecipientPlaceholders(redacted, mappings), explicitRecipientEmails: extractExplicitRecipientEmails(message) },
+  );
+  assert.equal(result.valid, true);
+});
+
 test("multiple calendar attendees typed in one message are each individually trusted", () => {
   const message = "invite alice@example.com and bob@example.com to the meeting";
   const explicitRecipientEmails = extractExplicitRecipientEmails(message);

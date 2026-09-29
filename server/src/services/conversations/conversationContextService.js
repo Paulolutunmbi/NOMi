@@ -78,7 +78,7 @@ const normalizeTrustedDraft = (value) => {
         .map((a) => ({
           id: typeof a.id === "string" ? a.id.slice(0, 100) : undefined,
           filename: a.filename.slice(0, 255),
-          mimeType: typeof a.mimeType === "string" ? a.mimeType.slice(0, 100) : "image/jpeg",
+          mimeType: typeof a.mimeType === "string" ? a.mimeType.slice(0, 100) : "application/octet-stream",
           size: Number.isInteger(a.size) ? a.size : undefined,
         }))
     : [];
@@ -145,7 +145,7 @@ const createConversationContextService = (model = TemporaryConversation, { ttlMs
   const expiration = () => new Date(now().getTime() + ttlMs);
   const create = async ({ userId, conversationId = crypto.randomUUID() }) => model.create({ conversationId, user: userId, expiresAt: expiration() });
   const getActive = async ({ userId, conversationId }) => model.findOne({ conversationId, user: userId, expiresAt: { $gt: now() } });
-  const update = async ({ userId, conversationId, messages, retrievedContext, placeholderMappings, gmailMessageIds, gmailCandidates, pendingGmailReply, trustedTarget, trustedGmailPerson, trustedDraft, pendingAmbiguity, pendingInteraction, calendarEventIds, calendarCandidates, trustedCalendarEvent }) => {
+  const update = async ({ userId, conversationId, messages, retrievedContext, placeholderMappings, gmailMessageIds, gmailCandidates, pendingGmailReply, trustedTarget, trustedGmailPerson, trustedDraft, pendingAmbiguity, pendingInteraction, calendarEventIds, calendarCandidates, trustedCalendarEvent, pendingTimeZone, userTimeZone }) => {
     const updateData = { $set: { expiresAt: expiration() } };
     if (messages !== undefined) updateData.$set.messages = normalizeMessages(messages);
     if (retrievedContext !== undefined) updateData.$set.retrievedContext = retrievedContext;
@@ -161,6 +161,8 @@ const createConversationContextService = (model = TemporaryConversation, { ttlMs
     if (calendarEventIds !== undefined) updateData.$set.calendarEventIds = normalizeCalendarEventIds(calendarEventIds);
     if (calendarCandidates !== undefined) updateData.$set.calendarCandidates = normalizeCalendarCandidates(calendarCandidates);
     if (trustedCalendarEvent !== undefined) updateData.$set.trustedCalendarEvent = normalizeTrustedCalendarEvent(trustedCalendarEvent);
+    if (pendingTimeZone !== undefined) updateData.$set.pendingTimeZone = pendingTimeZone;
+    if (userTimeZone !== undefined) updateData.$set.userTimeZone = userTimeZone;
     return model.findOneAndUpdate({ conversationId, user: userId, expiresAt: { $gt: now() } }, updateData, { returnDocument: "after" });
   };
   const cleanupExpired = () => model.deleteMany({ expiresAt: { $lte: now() } });

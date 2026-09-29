@@ -24,8 +24,11 @@ app.use(cors());
 // global parser rejects the body before the attachment router can handle it.
 app.use("/api/ai/attachments", createAttachmentRouter());
 app.use("/api/attachments", createAttachmentRouter());
-app.use(express.json({ limit: "16kb" }));
+// Chat transcript metadata can include rendered Gmail/calendar results. Let
+// the chat route parse a bounded larger body so its sanitizer can remove
+// oversized or unsafe fields before persistence.
 app.use("/api/chats", createChatRouter());
+app.use(express.json({ limit: "16kb" }));
 app.use("/api/auth", createAuthRouter());
 app.use("/api/integrations/google", googleIntegrationRoutes);
 app.use("/api/ai", createAIIntentRouter());
