@@ -1,3 +1,5 @@
+const { MAX_RECIPIENTS, splitRecipientTokens } = require("../validation/recipientList");
+
 const SUPPORTED_ACTIONS = new Set([
   "gmail.search", "gmail.read", "gmail.draft", "gmail.send", "gmail.draft.reply", "gmail.send.reply", "gmail.draft.update", "gmail.markRead",
 ]);
@@ -85,19 +87,28 @@ const encodeRaw = (value) => Buffer.from(value, "utf8").toString("base64").repla
 const encodeHeader = (value) => /^[\x20-\x7e]*$/.test(value) ? value : `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
 const validEmail = (value) => EMAIL.test(value || "");
 const messageId = (value) => typeof value === "string" && value.trim() && value.length <= 200 ? value.trim() : null;
+// One address or a comma/semicolon separated list, returned as a ready-to-use
+// "To" header value. Every address must be valid. Addresses cannot contain
+// whitespace, so no token can smuggle in an extra header line.
+const recipientHeader = (value) => {
+  const tokens = splitRecipientTokens(value);
+  if (!tokens.length || tokens.length > MAX_RECIPIENTS || !tokens.every(validEmail)) return null;
+  return tokens.join(", ");
+};
 const makeMime = ({ recipient, subject, body, reply, attachments = [] }) => {
-  if (!validEmail(recipient)) throw safeError("gmail_invalid_request", "A valid recipient is required");
+  const toHeader = recipientHeader(recipient);
+  if (!toHeader) throw safeError("gmail_invalid_request", "A valid recipient is required");
   if (typeof body !== "string" || body.length > MAX_BODY_LENGTH) throw safeError("gmail_invalid_request", "A valid message body is required");
 
   if (!attachments || !attachments.length) {
-    const headers = ["To: " + recipient, "Subject: " + encodeHeader(text(subject || "", MAX_HEADER_LENGTH)), "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: 8bit"];
+    const headers = ["To: " + toHeader, "Subject: " + encodeHeader(text(subject || "", MAX_HEADER_LENGTH)), "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: 8bit"];
     if (reply?.messageId) headers.push("In-Reply-To: <" + reply.messageId.replace(/[<>\s]/g, "") + ">", "References: " + reply.references);
     return encodeRaw(headers.join("\r\n") + "\r\n\r\n" + body.replace(/\r?\n/g, "\r\n"));
   }
 
   const boundary = `----=_Nomi_Part_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
   const headers = [
-    "To: " + recipient,
+    "To: " + toHeader,
     "Subject: " + encodeHeader(text(subject || "", MAX_HEADER_LENGTH)),
     "MIME-Version: 1.0",
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
@@ -229,7 +240,7 @@ const createGmailProvider = ({ gmailFactory } = {}) => {
           raw = makeMime({ recipient, subject, body: payload.body, reply: { messageId: originalMessageId, references }, attachments: payload.attachments });
           threadId = target.threadId;
         } else {
-          if (!validEmail(payload.recipient)) throw safeError("gmail_invalid_request", "A valid recipient is required");
+          if (!recipientHeader(payload.recipient)) throw safeError("gmail_invalid_request", "A valid recipient is required");
           raw = makeMime({ recipient: payload.recipient, subject: payload.subject, body: payload.body, attachments: payload.attachments });
           threadId = payload.threadId || undefined;
         }

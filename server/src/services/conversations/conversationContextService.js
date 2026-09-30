@@ -66,7 +66,7 @@ const normalizeTrustedDraft = (value) => {
   const draftId = typeof value.draftId === "string" && value.draftId.trim() ? value.draftId.slice(0, 200) : null;
   const threadId = typeof value.threadId === "string" && value.threadId.trim() ? value.threadId.slice(0, 200) : null;
   const messageId = typeof value.messageId === "string" && value.messageId.trim() ? value.messageId.slice(0, 200) : null;
-  const recipient = typeof value.recipient === "string" && value.recipient.trim() ? value.recipient.slice(0, 320) : null;
+  const recipient = typeof value.recipient === "string" && value.recipient.trim() ? value.recipient.slice(0, 2000) : null;
   const subject = typeof value.subject === "string" ? value.subject.slice(0, 500) : null;
   const action = ["gmail.draft", "gmail.send", "gmail.draft.reply", "gmail.send.reply"].includes(value.action) ? value.action : null;
   const body = typeof value.body === "string" ? value.body.slice(0, 20 * 1024) : null;
@@ -88,7 +88,7 @@ const normalizePendingAmbiguity = (value) => {
   if (!value || typeof value !== "object") return null;
   const action = ["gmail.draft.reply", "gmail.send.reply", "gmail.draft", "gmail.send"].includes(value.action) ? value.action : null;
   const body = typeof value.body === "string" ? value.body.slice(0, 10000) : null;
-  const recipient = typeof value.recipient === "string" ? value.recipient.slice(0, 320) : null;
+  const recipient = typeof value.recipient === "string" ? value.recipient.slice(0, 2000) : null;
   const ambiguityType = ["identity", "message"].includes(value.ambiguityType) ? value.ambiguityType : "identity";
   if (!action) return null;
   const result = { action, body, ambiguityType };

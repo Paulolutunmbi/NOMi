@@ -1,4 +1,5 @@
 const { validateIntent } = require("./intentValidator");
+const { splitRecipientTokens } = require("../validation/recipientList");
 const { buildIntentPrompt } = require("./promptBoundary");
 const { prepareAIInput } = require("../privacy/privacyService");
 const { explicitlyRequestedRecipientPlaceholders, extractExplicitRecipientEmails, requiresTargetClarification, unsupportedRequestReason, untrustedRequestedMessageId } = require("./intentSafetyPolicy");
@@ -105,6 +106,11 @@ const createAIGateway = ({ providerName = process.env.AI_PROVIDER, adapters = {}
     }
     try { response = await adapter.generateIntent(prompt); }
     catch (error) { return { status: "provider_error", provider: providerName, reason: error.code || "ai_provider_unavailable" }; }
+    // Models sometimes write "[EMAIL_1] and [EMAIL_2]" instead of a comma list.
+    // Only the separators are normalised; every entry is still validated one by one.
+    if (["gmail.send", "gmail.draft"].includes(response?.action) && typeof response?.parameters?.recipient === "string") {
+      response.parameters.recipient = response.parameters.recipient.replace(/\s+(?:and|&|plus)\s+/gi, ", ");
+    }
     const rawExplicitRecipient = input.explicitRecipientEmail || extractExplicitRecipientEmails(input.originalUserRequest || input.userRequest)[0] || null;
     const explicitRecipientEmail = typeof rawExplicitRecipient === "string" ? rawExplicitRecipient.trim().toLowerCase() : null;
     // Every address the user actually typed this turn, not just the first —
@@ -113,13 +119,17 @@ const createAIGateway = ({ providerName = process.env.AI_PROVIDER, adapters = {}
       ...(explicitRecipientEmail ? [explicitRecipientEmail] : []),
       ...extractExplicitRecipientEmails(input.originalUserRequest || input.userRequest),
     ])];
-    const modelRecipient = response?.parameters?.recipient;
-    const resolvedModelRecipient = prepared.mappings?.[modelRecipient]?.value || modelRecipient;
-    const recipientMatches = Boolean(explicitRecipientEmail && typeof resolvedModelRecipient === "string" && resolvedModelRecipient.trim().toLowerCase() === explicitRecipientEmail);
+    // The model may return one recipient or a comma-separated list of
+    // placeholders/addresses; resolve each token before comparing.
+    const resolvedModelRecipients = splitRecipientTokens(response?.parameters?.recipient)
+      .map((token) => (prepared.mappings?.[token]?.value || token).trim().toLowerCase());
+    const hashList = (values) => values.map((value) => addressHash(value)).filter(Boolean).join(",") || "none";
+    const recipientMatches = explicitRecipientEmailsList.length > 0 && resolvedModelRecipients.length === explicitRecipientEmailsList.length
+      && resolvedModelRecipients.every((address) => explicitRecipientEmailsList.includes(address));
     if (["gmail.send", "gmail.draft"].includes(response?.action)) {
-      console.info(`[AI DEBUG] explicit recipient extracted=${Boolean(explicitRecipientEmail)} hash=${addressHash(explicitRecipientEmail) || "none"}`);
-      console.info(`[AI DEBUG] AI recipient hash=${addressHash(resolvedModelRecipient) || "none"}`);
-      console.info(`[AI DEBUG] recipient comparison=${recipientMatches ? "MATCH" : explicitRecipientEmail ? "MISMATCH" : "NO_EXPLICIT_RECIPIENT"} source=${explicitRecipientEmail ? "explicit_user_email" : "none"} validation_path=aiGateway.validateIntent`);
+      console.info(`[AI DEBUG] explicit recipient extracted=${explicitRecipientEmailsList.length > 0} count=${explicitRecipientEmailsList.length} hash=${hashList(explicitRecipientEmailsList)}`);
+      console.info(`[AI DEBUG] AI recipient count=${resolvedModelRecipients.length} hash=${hashList(resolvedModelRecipients)}`);
+      console.info(`[AI DEBUG] recipient comparison=${recipientMatches ? "MATCH" : explicitRecipientEmailsList.length ? "MISMATCH" : "NO_EXPLICIT_RECIPIENT"} source=${explicitRecipientEmailsList.length ? "explicit_user_email" : "none"} validation_path=aiGateway.validateIntent`);
     }
     const validation = validateIntent(response, {
       trustedGmailMessageIds: prompt.trustedConversationContext.gmailMessageIds,

@@ -10,7 +10,7 @@ const { getIntegration } = require("../services/integrations/integrationRegistry
 const { getAIConfig } = require("../config/ai");
 const mongoose = require("mongoose");
 const ChatSession = require("../models/ChatSession");
-const { extractExplicitRecipientEmail } = require("../services/ai/intentSafetyPolicy");
+const { extractExplicitRecipientEmail, extractExplicitRecipientEmails } = require("../services/ai/intentSafetyPolicy");
 
 const validConversationId = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const GOOGLE_ERROR_RESPONSES = {
@@ -29,6 +29,11 @@ const looksLikeAmbiguityResolution = (message) => {
 };
 const explicitRecipient = (message) => {
   return extractExplicitRecipientEmail(message);
+};
+// Every address the user typed, as one "a, b" recipient value (or null).
+const explicitRecipientList = (message) => {
+  const all = extractExplicitRecipientEmails(message);
+  return all.length ? all.join(", ") : null;
 };
 const explicitBody = (message) => {
   const cleaned = String(message || "").replace(/\[[^\]]+\]\(mailto:[^)]+\)/ig, " ").replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig, " ");
@@ -115,7 +120,13 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
 
       const safe = prepareAIInput({ userRequest: message, untrustedRetrievedContent: (conversation.retrievedContext || []).slice(0, 5) });
       const userRecipient = explicitRecipient(message);
-      if (userRecipient && /\b(?:send|draft|write|compose|mail|email)\b/i.test(message)) {
+      // All typed addresses. With exactly one this is identical to userRecipient;
+      // with several, the whole list is kept so nobody is silently dropped.
+      const userRecipients = explicitRecipientList(message);
+      const typedAddressCount = extractExplicitRecipientEmails(message).length;
+      // trustedGmailPerson names ONE person ("him"/"her" follow-ups), so it is
+      // only set when the user typed a single address.
+      if (userRecipient && typedAddressCount === 1 && /\b(?:send|draft|write|compose|mail|email)\b/i.test(message)) {
         conversation.trustedGmailPerson = { email: userRecipient, name: null, source: "explicit_user_email" };
         await contextService.update({ userId: user._id, conversationId, trustedGmailPerson: conversation.trustedGmailPerson });
       }
@@ -139,7 +150,7 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
       const intent = restorePlaceholders(planned.intent, safe.mappings);
       // Keep an explicitly typed recipient deterministic. The planner can
       // choose the action/body, but cannot lose an address the user supplied.
-      const recipient = userRecipient;
+      const recipient = userRecipients;
       if (recipient && ["gmail.draft", "gmail.send"].includes(intent.action)) intent.parameters.recipient = recipient;
       else if (conversation.trustedGmailPerson?.email && ["gmail.draft", "gmail.send"].includes(intent.action)) intent.parameters.recipient = conversation.trustedGmailPerson.email;
       const knownRecipient = recipient || conversation.trustedGmailPerson?.email;
@@ -206,4 +217,4 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
   });
   return router;
 };
-module.exports = { createAIActionRouter, explicitRecipient, explicitBody };
+module.exports = { createAIActionRouter, explicitRecipient, explicitRecipientList, explicitBody };

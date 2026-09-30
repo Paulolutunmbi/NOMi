@@ -107,7 +107,7 @@ export function ApprovalCard({ action, pendingAction, attachmentsMeta, onDecide,
           {isSend ? 'Review this email. Approval covers this send only.' : `NOMI is asking to ${friendlyAction(action)}.`}
         </p>
         {pendingAction && <div className="mt-3 space-y-3 rounded-lg border border-line bg-surface p-3 text-sm text-ink-soft">
-          <label className="block">To<input className="mt-1 w-full rounded border border-line bg-surface px-2 py-1 text-ink" value={recipient} disabled={disabled || saving} onChange={(e) => { setRecipient(e.target.value); setSaved(false) }} /></label>
+          <label className="block">To<input className="mt-1 w-full rounded border border-line bg-surface px-2 py-1 text-ink" placeholder="Separate several addresses with commas" value={recipient} disabled={disabled || saving} onChange={(e) => { setRecipient(e.target.value); setSaved(false) }} /></label>
           <label className="block">Subject<input className="mt-1 w-full rounded border border-line bg-surface px-2 py-1 text-ink" value={subject} disabled={disabled || saving} onChange={(e) => { setSubject(e.target.value); setSaved(false) }} /></label>
           <label className="block">Message<textarea className="mt-1 min-h-32 w-full rounded border border-line bg-surface px-2 py-1 text-ink" value={body} disabled={disabled || saving} onChange={(e) => { setBody(e.target.value); setSaved(false) }} /></label>
           {attachments?.length > 0 && (

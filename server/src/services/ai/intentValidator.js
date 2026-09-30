@@ -1,3 +1,5 @@
+const { MAX_RECIPIENTS, splitRecipientTokens } = require("../validation/recipientList");
+
 const ACTIONS = {
   "gmail.read": { required: ["messageId"], allowed: ["messageId"] },
   "gmail.search": { required: ["query"], allowed: ["query", "maxResults"] },
@@ -111,19 +113,27 @@ const validateIntent = (intent, { trustedGmailMessageIds = [], trustedCalendarEv
     && !trustedGmailMessageIds.includes(intent.parameters.messageId)) return { valid: false, reason: "untrusted_or_unknown_message_id" };
   if (["gmail.draft", "gmail.send"].includes(intent.action)) {
     const { recipient, subject } = intent.parameters;
-    // A literal address is valid only if privacy protection preserved an
-    // address that the user explicitly supplied. Any other string must be a
-    // small, explicit self-recipient marker; names await identity resolution.
-    if (isSelfRecipientMarker(recipient)) {
-      // Accepted without resolving it or exposing the authenticated address.
-    } else if (EMAIL_PLACEHOLDER.test(recipient)) {
-      if (!recipientPlaceholders.includes(recipient)) return { valid: false, reason: "untrusted_recipient_placeholder" };
-    } else if (EMAIL.test(recipient) && explicitRecipientEmails.includes(recipient.toLowerCase())) {
-      // The planner may use exactly the address explicitly supplied this turn.
-    } else if (EMAIL.test(recipient)) {
-      return { valid: false, reason: explicitRecipientEmails.length ? "explicit_recipient_mismatch" : "untrusted_recipient_email" };
-    } else {
-      return { valid: false, reason: "unresolved_recipient" };
+    // recipient may be one address or a comma/semicolon separated list (same
+    // convention as calendar attendees). Every token is held to the exact same
+    // trust rule a single recipient always had: a literal address is valid only
+    // if privacy protection preserved an address the user explicitly supplied.
+    // Any other string must be a small, explicit self-recipient marker; names
+    // await identity resolution.
+    const tokens = splitRecipientTokens(recipient);
+    if (!tokens.length) return { valid: false, reason: "unresolved_recipient" };
+    if (tokens.length > MAX_RECIPIENTS) return { valid: false, reason: "too_many_recipients" };
+    for (const token of tokens) {
+      if (isSelfRecipientMarker(token)) {
+        // Accepted without resolving it or exposing the authenticated address.
+      } else if (EMAIL_PLACEHOLDER.test(token)) {
+        if (!recipientPlaceholders.includes(token)) return { valid: false, reason: "untrusted_recipient_placeholder" };
+      } else if (EMAIL.test(token) && explicitRecipientEmails.includes(token.toLowerCase())) {
+        // The planner may use exactly the addresses explicitly supplied this turn.
+      } else if (EMAIL.test(token)) {
+        return { valid: false, reason: explicitRecipientEmails.length ? "explicit_recipient_mismatch" : "untrusted_recipient_email" };
+      } else {
+        return { valid: false, reason: "unresolved_recipient" };
+      }
     }
     // Subject is optional from the model, but if provided it must be safe.
     const subjectCheck = validateSubject(subject);

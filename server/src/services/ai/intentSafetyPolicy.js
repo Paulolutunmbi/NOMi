@@ -44,19 +44,21 @@ const requiresTargetClarification = (userRequest, trustedGmailMessageIds = []) =
   return isPronounOrMissingTargetRequest(userRequest);
 };
 
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const explicitlyRequestedRecipientPlaceholders = (userRequest, mappings = {}) => {
   if (hasEmbeddedInstruction(userRequest)) return [];
   const placeholders = Object.entries(mappings)
     .filter(([, value]) => value.type === "EMAIL")
     .map(([placeholder]) => placeholder);
-  return placeholders.filter((placeholder) => {
-    const escaped = placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // Accept conversational lead-ins ("Good morning, send a mail to …") and
-    // mailto markdown. Trust still comes only from an address in this user turn.
-    const plainRequest = String(userRequest || "").replace(/\[([^\]]+)\]\(mailto:([^)]+)\)/ig, (_link, label, address) => {
-      const value = /\[EMAIL_\d+\]/i.test(address) ? address : /\[EMAIL_\d+\]/i.test(label) ? label : address;
-      return /^\[EMAIL_\d+\]$/i.test(value) ? value : `[${value}]`;
-    });
+  // Accept conversational lead-ins ("Good morning, send a mail to …") and
+  // mailto markdown. Trust still comes only from an address in this user turn.
+  const plainRequest = String(userRequest || "").replace(/\[([^\]]+)\]\(mailto:([^)]+)\)/ig, (_link, label, address) => {
+    const value = /\[EMAIL_\d+\]/i.test(address) ? address : /\[EMAIL_\d+\]/i.test(label) ? label : address;
+    return /^\[EMAIL_\d+\]$/i.test(value) ? value : `[${value}]`;
+  });
+  const directlyRequested = placeholders.filter((placeholder) => {
+    const escaped = escapeRegExp(placeholder);
     // Calendar invites are commonly phrased as "meeting/call/event *with*
     // someone" rather than "send/email *to* someone" — that preposition, and
     // the scheduling verbs that pair with it, need to count as an explicit
@@ -64,6 +66,23 @@ const explicitlyRequestedRecipientPlaceholders = (userRequest, mappings = {}) =>
     // untrusted just because of how the sentence is worded.
     return new RegExp(`(?:\\b(?:send|draft|write|compose|mail|email|add|invite|include|create|schedule|set\\s*up|book|meet)\\b[^.!?]{0,220}\\b(?:to|for|in|with)\\s*${escaped}|\\b(?:email|mail)\\s+${escaped}|\\b(?:add|invite|include|cc)\\s+(?:(?:\\[[^\\]]+\\]|and|also|,|&)\\s*)*${escaped})`, "i").test(plainRequest);
   });
+  // A list such as "send a mail to A, and B" only puts the *first* address
+  // directly after "to". Any further address the user typed in the same list
+  // (joined by a comma, "and", "&", "plus" or "also") is part of the same
+  // explicit request. Trust still comes only from the user's own text, and it
+  // can only extend from an address that was already directly requested.
+  const requested = new Set(directlyRequested);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const placeholder of placeholders) {
+      if (requested.has(placeholder)) continue;
+      const escaped = escapeRegExp(placeholder);
+      const continuesList = [...requested].some((anchor) => new RegExp(`${escapeRegExp(anchor)}(?:\\s*(?:[,;&]|\\band\\b|\\bplus\\b|\\balso\\b))+\\s*${escaped}`, "i").test(plainRequest));
+      if (continuesList) { requested.add(placeholder); grew = true; }
+    }
+  }
+  return placeholders.filter((placeholder) => requested.has(placeholder));
 };
 
 const untrustedRequestedMessageId = (userRequest, trustedGmailMessageIds = []) => {

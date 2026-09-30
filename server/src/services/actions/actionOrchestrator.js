@@ -3,6 +3,7 @@ const { resolveIdentity } = require("../identity/identityResolver");
 const { isSelfRecipientMarker, generateSubjectFromBody } = require("../ai/intentValidator");
 const { getAttachmentsForUser, removeAttachments } = require("../attachments/attachmentService");
 const { checkEmailDomain: checkEmailDomainDefault } = require("../validation/emailDomainCheck");
+const { MAX_RECIPIENTS, splitRecipientTokens } = require("../validation/recipientList");
 const { timeZoneFromText, describeTimeZone, stripOffset, addHoursWallClock, addMillisWallClock } = require("../calendar/timeZoneResolver");
 
 const REPLY_ACTIONS = new Set(["gmail.draft.reply", "gmail.send.reply"]);
@@ -1089,24 +1090,39 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       && !(activeConversation.gmailMessageIds || []).includes(intent.parameters.messageId)) {
       return { status: "rejected", reason: "untrusted_or_unknown_message_id" };
     }
-    let recipientIsSelf = false;
     if (NEW_MESSAGE_ACTIONS.has(intent.action)) {
-      if (isSelfRecipient({ recipient: intent.parameters.recipient })) {
-        recipientIsSelf = true;
-        const userEmail = typeof user?.email === "string" && EMAIL.test(user.email.trim()) ? user.email.trim().toLowerCase() : null;
-        if (!userEmail) return { status: "rejected", reason: "untrusted_recipient_email" };
-        intent.parameters.recipient = userEmail;
-      } else if (!EMAIL.test(intent.parameters.recipient || "")
-        || (!message.toLowerCase().includes(intent.parameters.recipient.toLowerCase())
-          && String(activeConversation.trustedGmailPerson?.email || "").toLowerCase() !== String(intent.parameters.recipient).toLowerCase())) {
-        return { status: "rejected", reason: "untrusted_recipient_email" };
+      // recipient may be one address or a comma/semicolon separated list. Every
+      // token is rechecked here with the exact rule a single recipient always
+      // had: a self marker resolves only to the authenticated user's own
+      // address, and any other address must appear verbatim in the user's own
+      // message (or be the person they clicked). The model cannot add anyone.
+      const tokens = splitRecipientTokens(intent.parameters.recipient);
+      if (!tokens.length || tokens.length > MAX_RECIPIENTS) return { status: "rejected", reason: "untrusted_recipient_email" };
+      const userEmail = typeof user?.email === "string" && EMAIL.test(user.email.trim()) ? user.email.trim().toLowerCase() : null;
+      const trustedPersonEmail = String(activeConversation.trustedGmailPerson?.email || "").toLowerCase();
+      const resolved = [];
+      const externalRecipients = [];
+      for (const token of tokens) {
+        if (isSelfRecipient({ recipient: token })) {
+          if (!userEmail) return { status: "rejected", reason: "untrusted_recipient_email" };
+          resolved.push(userEmail);
+        } else if (!EMAIL.test(token)
+          || (!message.toLowerCase().includes(token.toLowerCase()) && trustedPersonEmail !== token.toLowerCase())) {
+          return { status: "rejected", reason: "untrusted_recipient_email" };
+        } else {
+          resolved.push(token);
+          externalRecipients.push(token);
+        }
       }
+      const seen = new Set();
+      intent.parameters.recipient = resolved.filter((address) => !seen.has(address.toLowerCase()) && seen.add(address.toLowerCase())).join(", ");
       // Domain sanity check — a typo-of-a-known-provider or a domain with no
       // mail server at all is surfaced to the user instead of silently
       // sending/drafting to it. Never flags an unfamiliar domain that
-      // resolves fine — that's just someone's company address.
-      if (!recipientIsSelf) {
-        const domainCheck = await checkEmailDomain(intent.parameters.recipient);
+      // resolves fine — that's just someone's company address. Every external
+      // recipient is checked; the first problem address is reported.
+      for (const address of externalRecipients) {
+        const domainCheck = await checkEmailDomain(address);
         if (domainCheck.status === "likely_typo" || domainCheck.status === "no_mail_server") {
           return { status: "email_domain_warning", action: intent.action, reason: domainCheck.status, domain: domainCheck.domain, suggestion: domainCheck.suggestion || null, correctedEmail: domainCheck.correctedEmail || null };
         }

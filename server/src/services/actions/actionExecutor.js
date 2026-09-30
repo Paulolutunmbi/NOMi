@@ -2,6 +2,7 @@ const AuditLog = require("../../models/AuditLog");
 const { checkPermission, savePersistentDecision } = require("../permissions/permissionService");
 const { getIntegration } = require("../integrations/integrationRegistry");
 const PendingSendAction = require("../../models/PendingSendAction");
+const { parseRecipientList } = require("../validation/recipientList");
 
 const writeAudit = (entry) => AuditLog.create(entry);
 const UNSAFE_AUDIT_KEY = /token|credential|secret|authorization|api.?key|password|body|content|snippet|raw|html|text/i;
@@ -29,8 +30,13 @@ const createActionExecutor = ({ check = checkPermission, save = savePersistentDe
   // Sending is never performed by the proposal endpoint, even when a
   // persistent capability grant exists. It only creates an immutable approval.
   if (oneTimeGmailSend) {
-    const recipient = String(payload.recipient || "").trim().toLowerCase();
-    if (action === "gmail.send" && (!recipient || !/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(recipient))) return { status: "rejected", reason: "invalid_recipient" };
+    let recipient = String(payload.recipient || "").trim().toLowerCase();
+    if (action === "gmail.send") {
+      // One address or a comma-separated list; every address must be valid.
+      const parsed = parseRecipientList(recipient);
+      if (!parsed.ok) return { status: "rejected", reason: "invalid_recipient" };
+      recipient = parsed.recipients.join(", ");
+    }
     // Attachment binary data is stored in a Mongo Mixed field while the send
     // awaits approval. A raw Buffer there round-trips through the driver as
     // a BSON Binary wrapper rather than a plain Buffer, which silently
@@ -113,9 +119,10 @@ const approvePendingSend = async ({ userId, conversationId, actionId, decision, 
 
 const editPendingSend = async ({ userId, conversationId, actionId, recipient, subject, body, pendingSendModel = PendingSendAction, now = () => new Date() }) => {
   if (!/^[a-f0-9]{24}$/i.test(String(actionId || ""))) return { status: "invalid" };
-  if (typeof recipient !== "string" || !/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(recipient.trim())
+  const parsedRecipients = parseRecipientList(recipient);
+  if (!parsedRecipients.ok
     || typeof subject !== "string" || subject.length > 500 || typeof body !== "string" || !body.trim() || body.length > 10000) return { status: "invalid" };
-  const updated = await pendingSendModel.findOneAndUpdate({ _id: actionId, user: userId, conversationId, status: "pending", expiresAt: { $gt: now() } }, { $set: { "payload.recipient": recipient.trim().toLowerCase(), "payload.subject": subject.trim(), "payload.body": body } }, { returnDocument: "after", runValidators: true }).lean();
+  const updated = await pendingSendModel.findOneAndUpdate({ _id: actionId, user: userId, conversationId, status: "pending", expiresAt: { $gt: now() } }, { $set: { "payload.recipient": parsedRecipients.recipients.join(", "), "payload.subject": subject.trim(), "payload.body": body } }, { returnDocument: "after", runValidators: true }).lean();
   if (updated) return { status: "updated", pendingAction: { id: String(updated._id), recipient: updated.payload.recipient, subject: updated.payload.subject || "", body: updated.payload.body || "", expiresAt: updated.expiresAt } };
   const existing = await pendingSendModel.findOne({ _id: actionId, user: userId, conversationId }).lean();
   if (!existing) return { status: "not_found" };
