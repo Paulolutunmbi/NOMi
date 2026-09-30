@@ -8,5 +8,8 @@ export function summarizeGoogleScopes(scopes = []) {
   return {
     gmail: has('gmail'),
     calendar: has('calendar'),
+    // gmail.modify is what lets NOMI mark messages as read. Accounts connected
+    // before it was added lack it and must reconnect.
+    gmailModify: has('gmail.modify'),
   }
 }

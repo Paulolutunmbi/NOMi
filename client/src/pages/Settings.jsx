@@ -275,7 +275,13 @@ export default function Settings() {
               <div className="mt-3 flex flex-wrap gap-2">
                 <AccessBadge label="Gmail access" granted={access.gmail} />
                 <AccessBadge label="Calendar access" granted={access.calendar} />
+                <AccessBadge label="Mark as read" granted={access.gmailModify} />
               </div>
+              {access.gmail && !access.gmailModify && (
+                <p className="mt-2 text-xs text-ink-faint">
+                  NOMI needs one more Google permission to mark emails as read. Disconnect, then connect Google again and accept all permissions.
+                </p>
+              )}
             </div>
           )}
 

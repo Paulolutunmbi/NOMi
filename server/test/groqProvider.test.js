@@ -3,6 +3,8 @@ const assert = require("node:assert/strict");
 const { DEFAULT_GROQ_MODEL, getAIConfig } = require("../src/config/ai");
 const { createGroqProvider } = require("../src/services/ai/groqProvider");
 const { createAIGateway } = require("../src/services/ai/aiGateway");
+const { INTENT_SCHEMA } = require("../src/services/ai/groqProvider");
+const { ACTIONS } = require("../src/services/ai/intentValidator");
 
 const fullParameters = (values = {}) => ({
   body: null, maxResults: null, messageId: null, query: null, recipient: null, subject: null,
@@ -78,4 +80,10 @@ test("Groq provider reports ai_provider_rate_limited when the fallback is limite
     client: { chat: { completions: { create: async () => { throw Object.assign(new Error("rate limited"), { status: 429 }); } } } },
   });
   await assert.rejects(() => provider.generateIntent({ system: "s", userRequest: "r", untrustedRetrievedContent: [], trustedConversationContext: {} }), { code: "ai_provider_rate_limited" });
+});
+
+test("Groq strict schema action enum stays in sync with the validator (incl. gmail.markRead)", () => {
+  const enumActions = INTENT_SCHEMA.schema.properties.action.enum;
+  assert.ok(enumActions.includes("gmail.markRead"));
+  for (const action of Object.keys(ACTIONS)) assert.ok(enumActions.includes(action), `schema enum is missing ${action}`);
 });
