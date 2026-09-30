@@ -10,6 +10,8 @@ import ForgotPassword from './pages/ForgotPassword'
 import Onboarding from './pages/Onboarding'
 import Home from './pages/Home'
 import Settings from './pages/Settings'
+import Privacy from './pages/Privacy'
+import Terms from './pages/Terms'
 
 function AuthenticatedApp() {
   const { user, signOut } = useAuth()
@@ -35,6 +37,8 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<RootRoute />} />
+      <Route path="/privacy" element={<Privacy />} />
+      <Route path="/terms" element={<Terms />} />
       <Route path="/sign-in" element={<RequireGuest><SignIn /></RequireGuest>} />
       <Route path="/sign-up" element={<RequireGuest><SignUp /></RequireGuest>} />
       <Route path="/forgot-password" element={<RequireGuest><ForgotPassword /></RequireGuest>} />

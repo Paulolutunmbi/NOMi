@@ -130,6 +130,10 @@ export default function Landing() {
       </main>
 
       <footer className="border-t border-line px-5 py-6 text-center text-xs text-ink-faint sm:px-10">
+        <div className="mb-3 flex justify-center gap-5">
+          <Link to="/privacy" className="transition-colors hover:text-ink">Privacy Policy</Link>
+          <Link to="/terms" className="transition-colors hover:text-ink">Terms of Service</Link>
+        </div>
         © {new Date().getFullYear()} NOMI. Not affiliated with Google.
       </footer>
     </div>

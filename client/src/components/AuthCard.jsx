@@ -9,7 +9,7 @@ export default function AuthCard({ title, subtitle, children, footer }) {
           <NomiLogo />
         </Link>
       </div>
-      <div className="flex flex-1 items-center justify-center px-4 pb-16">
+      <div className="flex flex-1 items-center justify-center px-4 pb-8">
         <div className="w-full max-w-sm">
           <div className="rounded-2xl border border-line bg-surface p-6 shadow-card sm:p-7">
             <h1 className="text-lg font-semibold text-ink">{title}</h1>
@@ -19,6 +19,10 @@ export default function AuthCard({ title, subtitle, children, footer }) {
           {footer && <p className="mt-5 text-center text-sm text-ink-faint">{footer}</p>}
         </div>
       </div>
+      <footer className="flex justify-center gap-5 px-4 pb-6 text-xs text-ink-faint">
+        <Link to="/privacy" className="hover:text-ink">Privacy Policy</Link>
+        <Link to="/terms" className="hover:text-ink">Terms of Service</Link>
+      </footer>
     </div>
   )
 }
