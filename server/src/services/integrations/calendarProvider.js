@@ -19,8 +19,25 @@ const safeError = (code, message) => Object.assign(new Error(message), { code, s
 
 const normalizeGoogleError = (error, { eventNotFound = false } = {}) => {
   if (error?.safe) return error;
+  // Google client errors can contain OAuth request headers and credentials.
+  // Log only the diagnostic fields needed to identify the API failure.
+  const googleError = error?.response?.data?.error;
+  const details = {
+    status: Number(error?.code || error?.response?.status || error?.status) || null,
+    code: typeof error?.code === "string" ? error.code : null,
+    message: typeof error?.message === "string" ? error.message.slice(0, 500) : null,
+    googleMessage: typeof googleError?.message === "string" ? googleError.message.slice(0, 500) : null,
+    reasons: Array.isArray(googleError?.errors)
+      ? googleError.errors.map(({ reason, domain }) => ({ reason, domain }))
+      : [],
+    request: error?.response?.config ? {
+      method: error.response.config.method,
+      url: error.response.config.url,
+    } : undefined,
+  };
+  console.error("[Google Calendar] API request failed:", JSON.stringify(details));
   const status = Number(error?.code || error?.response?.status || error?.status);
-  const reason = String(error?.response?.data?.error?.errors?.[0]?.reason || error?.message || "").toLowerCase();
+  const reason = String(googleError?.errors?.[0]?.reason || googleError?.message || error?.message || "").toLowerCase();
   if (eventNotFound && status === 404) return safeError("calendar_event_not_found", "The selected calendar event was not found");
   if (status === 401 || reason.includes("invalid_grant") || reason.includes("invalid credentials")) {
     return safeError("google_reconnect_required", "Google connection needs to be reconnected");
