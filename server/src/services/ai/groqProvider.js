@@ -46,6 +46,15 @@ const providerError = (code, cause) => {
 
 const normalizeGroqError = (error) => {
   if (error.code === "ai_provider_not_configured") return error;
+  // Keep the provider's reason visible in Render without logging the prompt,
+  // completion, API key, or request headers.
+  console.error("[Groq] API request failed:", JSON.stringify({
+    status: Number(error.status) || null,
+    code: typeof error.code === "string" ? error.code : null,
+    type: typeof error.type === "string" ? error.type : null,
+    message: typeof error.message === "string" ? error.message.slice(0, 500) : null,
+    requestId: typeof error.request_id === "string" ? error.request_id.slice(0, 100) : null,
+  }));
   if (error.status === 401 || error.status === 403) return providerError("ai_provider_auth_failed", error);
   if (error.status === 429) return providerError("ai_provider_rate_limited", error);
   if (error.status === 404 || error.status === 400) return providerError("ai_provider_response_invalid", error);
