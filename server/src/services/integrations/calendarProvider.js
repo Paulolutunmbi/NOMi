@@ -93,6 +93,34 @@ const normalizeEvent = (event) => ({
   htmlLink: text(event?.htmlLink, 1000) || null,
 });
 
+const HAS_OFFSET = /(Z|[+-]\d{2}:\d{2})$/;
+
+const zoneOffsetMinutes = (timeZone, date) => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone, hourCycle: "h23",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(date);
+  const p = Object.fromEntries(parts.map((x) => [x.type, x.value]));
+  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  return Math.round((asUtc - Math.floor(date.getTime() / 1000) * 1000) / 60000);
+};
+
+// Google's list/freebusy endpoints need an absolute instant. Wall-clock
+// strings are interpreted in the user's zone; ones with an offset pass through.
+const rangeDateTime = (value, timeZone) => {
+  const v = isoDateTime(value);
+  if (!v) return null;
+  if (HAS_OFFSET.test(v)) return v;
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return null;
+  const guess = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+  const zone = timeZone || "Africa/Lagos";
+  let off = zoneOffsetMinutes(zone, new Date(guess));
+  off = zoneOffsetMinutes(zone, new Date(guess - off * 60000));
+  return new Date(guess - off * 60000).toISOString();
+};
+
 const createCalendarProvider = ({ calendarFactory } = {}) => {
   const clientFor = (auth) => (calendarFactory ? calendarFactory(auth) : require("googleapis").google.calendar({ version: "v3", auth }));
   const getEvent = async (calendar, id) => {
@@ -107,8 +135,8 @@ const createCalendarProvider = ({ calendarFactory } = {}) => {
       if (action === "calendar.search") {
         const query = payload.query ? text(payload.query, MAX_QUERY_LENGTH) : undefined;
         const now = Date.now();
-        const timeMin = isoDateTime(payload.timeMin) || new Date(now).toISOString();
-        const timeMax = isoDateTime(payload.timeMax) || new Date(now + DEFAULT_SEARCH_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+        const timeMin = rangeDateTime(payload.timeMin, payload.timeZone) || new Date(now).toISOString();
+        const timeMax = rangeDateTime(payload.timeMax, payload.timeZone) || new Date(now + DEFAULT_SEARCH_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
         const requested = payload.maxResults === undefined ? 10 : Number(payload.maxResults);
         if (!Number.isInteger(requested) || requested < 1) throw safeError("calendar_invalid_request", "maxResults must be between 1 and 50");
         const maxResults = Math.min(requested, MAX_RESULTS);
@@ -126,8 +154,8 @@ const createCalendarProvider = ({ calendarFactory } = {}) => {
         return { event: normalizeEvent(event), auditMetadata: { operation: "calendar_read" } };
       }
       if (action === "calendar.freebusy") {
-        const timeMin = isoDateTime(payload.timeMin);
-        const timeMax = isoDateTime(payload.timeMax);
+        const timeMin = rangeDateTime(payload.timeMin, payload.timeZone);
+        const timeMax = rangeDateTime(payload.timeMax, payload.timeZone);
         if (!timeMin || !timeMax) throw safeError("calendar_invalid_request", "A valid timeMin and timeMax are required");
         const response = await calendar.freebusy.query({ requestBody: { timeMin, timeMax, items: [{ id: "primary" }] } });
         const busy = (response.data?.calendars?.primary?.busy || []).slice(0, 100)

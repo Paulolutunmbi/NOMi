@@ -235,8 +235,8 @@ const publicCalendarCandidate = (event, index) => ({
 });
 const calendarPayloadFor = (intent) => {
   const { action, parameters: p } = intent;
-  if (action === "calendar.search") return { query: p.query || undefined, timeMin: p.timeMin || undefined, timeMax: p.timeMax || undefined, maxResults: p.maxResults || undefined };
-  if (action === "calendar.freebusy") return { timeMin: p.timeMin, timeMax: p.timeMax };
+  if (action === "calendar.search") return { query: p.query || undefined, timeMin: p.timeMin || undefined, timeMax: p.timeMax || undefined, maxResults: p.maxResults || undefined, timeZone: p.timeZone || undefined };
+  if (action === "calendar.freebusy") return { timeMin: p.timeMin, timeMax: p.timeMax, timeZone: p.timeZone || undefined };
   if (action === "calendar.read" || action === "calendar.delete") return { eventId: p.eventId };
   if (action === "calendar.create") {
     // The model isn't required to supply endDateTime (see intentValidator):
@@ -665,6 +665,15 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
         p.endDateTime = Number.isFinite(durationMs) && durationMs > 0 ? addMillisWallClock(p.startDateTime, durationMs) : null;
       }
       p.timeZone = chosenTimeZone;
+    }
+    if (intent.action === "calendar.search" || intent.action === "calendar.freebusy") {
+      const p = intent.parameters;
+      // Same rule as create: a zone named in the message wins, then the user's
+      // saved zone. Offsets are dropped so "today" means today for the user, not
+      // for the UTC server clock.
+      p.timeZone = timeZoneFromText(message) || user.timeZone || DEFAULT_TIME_ZONE;
+      if (p.timeMin) p.timeMin = stripOffset(p.timeMin);
+      if (p.timeMax) p.timeMax = stripOffset(p.timeMax);
     }
     const target = CALENDAR_EVENT_ACTIONS.has(intent.action)
       ? { type: "calendar_event", id: intent.parameters.eventId }
