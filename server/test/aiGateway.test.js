@@ -72,3 +72,36 @@ test("person search does not reclassify arbitrary email queries as contact searc
   assert.equal(called, true);
   assert.equal(result.status, "proposed");
 });
+
+test("follow-up send with no typed address accepts the server-trusted recipient", async () => {
+  const gateway = createAIGateway({ providerName: "groq", adapters: { groq: { generateIntent: async () => ({
+    action: "gmail.send", parameters: fullParams({ recipient: "paul@example.com", subject: "Screenshot", body: "Please check this out." }),
+  }) } } });
+  const result = await gateway.generateIntent({
+    safeInput: { userRequest: "just another screenshot", untrustedRetrievedContent: [] },
+    trustedConversationContext: { trustedGmailPerson: { email: "Paul@Example.com", name: null } },
+  });
+  assert.equal(result.status, "proposed");
+  assert.equal(result.intent.action, "gmail.send");
+});
+
+test("follow-up send still rejects an address that is not the trusted recipient", async () => {
+  const gateway = createAIGateway({ providerName: "groq", adapters: { groq: { generateIntent: async () => ({
+    action: "gmail.send", parameters: fullParams({ recipient: "attacker@evil.com", subject: "Hi", body: "Hello" }),
+  }) } } });
+  const result = await gateway.generateIntent({
+    safeInput: { userRequest: "just another screenshot", untrustedRetrievedContent: [] },
+    trustedConversationContext: { trustedGmailPerson: { email: "paul@example.com", name: null } },
+  });
+  assert.equal(result.status, "invalid");
+  assert.equal(result.reason, "explicit_recipient_mismatch");
+});
+
+test("send with no typed address and no trusted recipient is still rejected", async () => {
+  const gateway = createAIGateway({ providerName: "groq", adapters: { groq: { generateIntent: async () => ({
+    action: "gmail.send", parameters: fullParams({ recipient: "paul@example.com", subject: "Hi", body: "Hello" }),
+  }) } } });
+  const result = await gateway.generateIntent({ safeInput: { userRequest: "send this too", untrustedRetrievedContent: [] } });
+  assert.equal(result.status, "invalid");
+  assert.equal(result.reason, "untrusted_recipient_email");
+});

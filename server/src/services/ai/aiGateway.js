@@ -119,6 +119,16 @@ const createAIGateway = ({ providerName = process.env.AI_PROVIDER, adapters = {}
       ...(explicitRecipientEmail ? [explicitRecipientEmail] : []),
       ...extractExplicitRecipientEmails(input.originalUserRequest || input.userRequest),
     ])];
+    // Follow-ups such as "send this too" / "just another screenshot" carry no
+    // address, so the planner reuses the recipient the server already trusts
+    // (an address the user typed earlier in this conversation, or a person they
+    // selected). That address comes from server state, never from the model or
+    // retrieved content, so it is safe to accept for validation. It is kept
+    // separate from the explicit list so the diagnostics stay accurate.
+    const trustedPersonEmail = typeof prompt.trustedConversationContext?.trustedGmailPerson?.email === "string"
+      ? prompt.trustedConversationContext.trustedGmailPerson.email.trim().toLowerCase() : null;
+    const validationRecipientEmails = trustedPersonEmail && !explicitRecipientEmailsList.length
+      ? [trustedPersonEmail] : explicitRecipientEmailsList;
     // The model may return one recipient or a comma-separated list of
     // placeholders/addresses; resolve each token before comparing.
     const resolvedModelRecipients = splitRecipientTokens(response?.parameters?.recipient)
@@ -135,7 +145,7 @@ const createAIGateway = ({ providerName = process.env.AI_PROVIDER, adapters = {}
       trustedGmailMessageIds: prompt.trustedConversationContext.gmailMessageIds,
       trustedCalendarEventIds: prompt.trustedConversationContext.calendarEventIds,
       recipientPlaceholders: explicitlyRequestedRecipientPlaceholders(prompt.userRequest, prepared.mappings),
-      explicitRecipientEmails: explicitRecipientEmailsList,
+      explicitRecipientEmails: validationRecipientEmails,
     });
     const validationDiagnostic = {
       stage: "intent_validation",

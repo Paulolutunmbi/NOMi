@@ -73,3 +73,14 @@ crash in either terminal excerpt. I improved the error logging (#5 above) so
 next time it happens, copy the new `Unhandled API error on ...` line
 (it now includes the route and full stack trace) and send it over — that'll
 pin it down fast.
+
+## Follow-up send fix ("send this too" -> "NOMI couldn't do that safely")
+
+`server/src/services/ai/aiGateway.js` — on a follow-up with no typed address
+(e.g. "just another screenshot"), the planner correctly reused the recipient
+from earlier in the chat, but the validator only trusted addresses typed in the
+*current* message, so it failed with `untrusted_recipient_email`. The gateway now
+also accepts the server-stored `trustedGmailPerson` address (only when no address
+was typed this turn). Any other address is still rejected
+(`explicit_recipient_mismatch`), and with no trusted recipient the old behaviour
+is unchanged. Tests added in `server/test/aiGateway.test.js`.
