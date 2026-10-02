@@ -181,6 +181,31 @@ const defaultTimeZoneForCountry = (input) => {
   return null;
 };
 
+// Resolve this request from the current profile, without caching it. A zone
+// stated in the message takes precedence over the saved zone or country.
+const resolveUserTimeZone = (user, message = "") => {
+  const stated = timeZoneFromText(message);
+  if (stated) return stated;
+  if (isValidTimeZone(user?.timeZone)) return user.timeZone;
+  return user?.country ? defaultTimeZoneForCountry(user.country) : null;
+};
+
+// Current local wall clock and its UTC offset in the requested zone.
+const zoneNow = (timeZone, at = new Date()) => {
+  const zone = isValidTimeZone(timeZone) ? timeZone : "UTC";
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: zone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(at).map((x) => [x.type, x.value]));
+  const asUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+  const offMin = Math.round((asUtc - Math.floor(at.getTime() / 1000) * 1000) / 60000);
+  const sign = offMin < 0 ? "-" : "+";
+  const abs = Math.abs(offMin);
+  const offset = `${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
+  const date = `${parts.year}-${parts.month}-${parts.day}`;
+  return { timeZone: zone, date, offset, iso: `${date}T${parts.hour}:${parts.minute}:${parts.second}${offset}` };
+};
+
 module.exports = {
   addMillisWallClock,
-  defaultTimeZoneForCountry, COMMON_ZONES, isValidTimeZone, resolveTimeZone, timeZoneFromText, describeTimeZone, optionFor, stripOffset, addHoursWallClock, formatWallClock };
+  defaultTimeZoneForCountry, COMMON_ZONES, isValidTimeZone, resolveTimeZone, timeZoneFromText, describeTimeZone, optionFor, stripOffset, addHoursWallClock, formatWallClock, resolveUserTimeZone, zoneNow };

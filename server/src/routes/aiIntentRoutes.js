@@ -1,4 +1,5 @@
 const express = require("express");
+const { resolveUserTimeZone } = require("../services/calendar/timeZoneResolver");
 const { findOrCreateFromFirebaseClaims } = require("../services/users/userService");
 const { createConversationContextService } = require("../services/conversations/conversationContextService");
 const { prepareAIInput, restorePlaceholders } = require("../services/privacy/privacyService");
@@ -39,7 +40,7 @@ const createAIIntentRouter = ({ gateway, contextService = createConversationCont
         placeholderMappings: safe.mappings,
         originalUserRequest: message,
         explicitRecipientEmail: extractExplicitRecipientEmail(message),
-        trustedConversationContext: { gmailMessageIds: conversation.gmailMessageIds || [], calendarEventIds: conversation.calendarEventIds || [] },
+        trustedConversationContext: { userTimeZone: resolveUserTimeZone(user, message), gmailMessageIds: conversation.gmailMessageIds || [], calendarEventIds: conversation.calendarEventIds || [] },
       });
       if (result.status === "proposed") {
         const intent = restorePlaceholders(result.intent, safe.mappings);

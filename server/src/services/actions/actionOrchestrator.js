@@ -4,7 +4,7 @@ const { isSelfRecipientMarker, generateSubjectFromBody } = require("../ai/intent
 const { getAttachmentsForUser, removeAttachments } = require("../attachments/attachmentService");
 const { checkEmailDomain: checkEmailDomainDefault } = require("../validation/emailDomainCheck");
 const { MAX_RECIPIENTS, splitRecipientTokens } = require("../validation/recipientList");
-const { timeZoneFromText, describeTimeZone, stripOffset, addHoursWallClock, addMillisWallClock } = require("../calendar/timeZoneResolver");
+const { timeZoneFromText, resolveUserTimeZone, describeTimeZone, stripOffset, addHoursWallClock, addMillisWallClock } = require("../calendar/timeZoneResolver");
 
 const REPLY_ACTIONS = new Set(["gmail.draft.reply", "gmail.send.reply"]);
 const DRAFT_ACTIONS = new Set(["gmail.draft", "gmail.draft.reply"]);
@@ -285,8 +285,8 @@ const replyActionFor = (compoundAction) => {
   return "gmail.draft.reply"; // search_then_reply and search_then_draft_reply both draft
 };
 
-// Fallback when a user has no country set yet in their profile.
-const DEFAULT_TIME_ZONE = "Africa/Lagos";
+// Last resort only when the profile and request contain no zone.
+const DEFAULT_TIME_ZONE = "UTC";
 
 const createActionOrchestrator = ({ contextService, actionExecutor = executeAction, resolve = resolveIdentity, checkEmailDomain = checkEmailDomainDefault } = {}) => {
   if (!contextService) throw new Error("contextService is required");
@@ -650,7 +650,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     const reschedulingTime = intent.action === "calendar.update" && (intent.parameters.startDateTime || intent.parameters.endDateTime);
     if (intent.action === "calendar.create" || reschedulingTime) {
       const stated = timeZoneFromText(message);
-      chosenTimeZone = stated || user.timeZone || DEFAULT_TIME_ZONE;
+      chosenTimeZone = resolveUserTimeZone(user, message) || DEFAULT_TIME_ZONE;
       timeZoneDefaulted = !stated;
       const p = intent.parameters;
       if (p.startDateTime) p.startDateTime = stripOffset(p.startDateTime);
@@ -674,7 +674,7 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       // Same rule as create: a zone named in the message wins, then the user's
       // saved zone. Offsets are dropped so "today" means today for the user, not
       // for the UTC server clock.
-      p.timeZone = timeZoneFromText(message) || user.timeZone || DEFAULT_TIME_ZONE;
+      p.timeZone = resolveUserTimeZone(user, message) || DEFAULT_TIME_ZONE;
       if (p.timeMin) p.timeMin = stripOffset(p.timeMin);
       if (p.timeMax) p.timeMax = stripOffset(p.timeMax);
     }

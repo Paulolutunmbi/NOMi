@@ -1,3 +1,4 @@
+const { resolveUserTimeZone } = require("../services/calendar/timeZoneResolver");
 const express = require("express");
 const { findOrCreateFromFirebaseClaims } = require("../services/users/userService");
 const { createConversationContextService } = require("../services/conversations/conversationContextService");
@@ -133,7 +134,7 @@ const createAIActionRouter = ({ gateway, contextService = createConversationCont
       await contextService.update({ userId: user._id, conversationId, placeholderMappings: safe.mappings });
       const selectedGateway = gateway || createAIGateway({ providerName: config.provider, adapters: config.provider === "groq" ? { groq: createGroqProvider({ config }) } : {} });
       const planned = await selectedGateway.generateIntent({ safeInput: safe.payload, placeholderMappings: safe.mappings, originalUserRequest: message, explicitRecipientEmail: userRecipient,
-        trustedConversationContext: { gmailMessageIds: conversation.gmailMessageIds || [], trustedGmailPerson: conversation.trustedGmailPerson || null, calendarEventIds: conversation.calendarEventIds || [], trustedCalendarEvent: conversation.trustedCalendarEvent || null, chatHistory: conversation.messages || [],
+        trustedConversationContext: { userTimeZone: resolveUserTimeZone(user, message), gmailMessageIds: conversation.gmailMessageIds || [], trustedGmailPerson: conversation.trustedGmailPerson || null, calendarEventIds: conversation.calendarEventIds || [], trustedCalendarEvent: conversation.trustedCalendarEvent || null, chatHistory: conversation.messages || [],
           rollingSummary: persistentChat?.summary || null,
           currentDraftBody: conversation.trustedDraft?.body || null } });
       if (planned.status !== "proposed") {

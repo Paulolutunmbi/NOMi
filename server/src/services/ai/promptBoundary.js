@@ -1,3 +1,4 @@
+const { zoneNow } = require("../calendar/timeZoneResolver");
 const normalizeTrustedMessageIds = (trustedConversationContext = {}) => {
   const chatHistory = (Array.isArray(trustedConversationContext.chatHistory) ? trustedConversationContext.chatHistory : [])
     .filter((turn) => turn && ["user", "assistant"].includes(turn.role) && typeof turn.content === "string")
@@ -27,9 +28,10 @@ const normalizeTrustedMessageIds = (trustedConversationContext = {}) => {
     // remain in server state and are reached through clickable selection.
     calendarEventIds: trustedCalendarEvent ? [trustedCalendarEvent.id] : [],
     ...(trustedCalendarEvent ? { trustedCalendarEvent } : {}),
-    // Server clock, so the model can resolve relative dates/times ("tomorrow
-    // at 3pm") into absolute ISO 8601 values itself; it never sets the clock.
-    serverTime: new Date().toISOString(),
+    // The server clock expressed in the user's zone keeps relative date
+    // interpretation aligned with the user's local calendar day.
+    serverTime: zoneNow(trustedConversationContext.userTimeZone).iso,
+    userTimeZone: zoneNow(trustedConversationContext.userTimeZone).timeZone,
     ...(chatHistory.length ? { chatHistory } : {}),
     ...(rollingSummary ? { rollingSummary } : {}),
     ...(currentDraftBody ? { currentDraftBody } : {}),

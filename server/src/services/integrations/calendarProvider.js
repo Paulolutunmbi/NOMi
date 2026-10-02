@@ -140,11 +140,28 @@ const createCalendarProvider = ({ calendarFactory } = {}) => {
         const requested = payload.maxResults === undefined ? 10 : Number(payload.maxResults);
         if (!Number.isInteger(requested) || requested < 1) throw safeError("calendar_invalid_request", "maxResults must be between 1 and 50");
         const maxResults = Math.min(requested, MAX_RESULTS);
+        const zone = payload.timeZone || "Africa/Lagos";
         const listed = await calendar.events.list({
-          calendarId: "primary", q: query, timeMin, timeMax, maxResults,
+          calendarId: "primary", q: query, timeMin, timeMax, timeZone: zone, maxResults,
           singleEvents: true, orderBy: "startTime",
         });
-        const events = (listed.data.items || []).map(normalizeEvent);
+        // The API can return events that overlap a requested window. Keep
+        // timed events whose start falls in the window, and all-day events
+        // whose local calendar day overlaps it.
+        const winStart = Date.parse(timeMin);
+        const winEnd = Date.parse(timeMax);
+        const strict = Boolean(payload.timeMin);
+        const inWindow = (event) => {
+          if (!strict) return true;
+          if (event.start?.date) {
+            const start = Date.parse(rangeDateTime(`${event.start.date}T00:00:00`, zone));
+            const end = Date.parse(rangeDateTime(`${event.end?.date || event.start.date}T00:00:00`, zone));
+            return start < winEnd && end > winStart;
+          }
+          const start = Date.parse(event.start?.dateTime);
+          return Number.isNaN(start) || (start >= winStart && start < winEnd);
+        };
+        const events = (listed.data.items || []).filter(inWindow).map(normalizeEvent);
         return { events, auditMetadata: { count: events.length, operation: "calendar_search" } };
       }
       if (action === "calendar.read") {

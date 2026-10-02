@@ -62,6 +62,27 @@ const normalizeGroqError = (error) => {
   return providerError("ai_provider_unavailable", error);
 };
 
+const PARAM_KEYS = INTENT_SCHEMA.schema.properties.parameters.required;
+
+// Groq validates generated JSON against the schema after generation. If it
+// omits nullable parameters, recover the generated object and fill those keys
+// with null before the normal intent validator handles it.
+const repairFromValidationError = (error) => {
+  if (error?.status !== 400) return null;
+  const body = error.error?.error || error.error || {};
+  let failed = body.failed_generation;
+  if (typeof failed !== "string") {
+    try { failed = JSON.parse(String(error.message || "").replace(/^\d+\s+/, ""))?.error?.failed_generation; } catch { failed = null; }
+  }
+  if (typeof failed !== "string") return null;
+  let parsed;
+  try { parsed = JSON.parse(failed); } catch { return null; }
+  if (!parsed || typeof parsed.action !== "string" || !parsed.parameters || typeof parsed.parameters !== "object" || Array.isArray(parsed.parameters)) return null;
+  const parameters = {};
+  for (const key of PARAM_KEYS) parameters[key] = parsed.parameters[key] === undefined ? null : parsed.parameters[key];
+  return { action: parsed.action, parameters };
+};
+
 const createGroqProvider = ({ config = getAIConfig(), client } = {}) => {
   const settings = validateAIConfig(config);
   const groq = client || new Groq({ apiKey: settings.groqApiKey, timeout: 15000, maxRetries: 2 });
@@ -81,6 +102,11 @@ const createGroqProvider = ({ config = getAIConfig(), client } = {}) => {
         try {
           completion = await request(settings.groqModel);
         } catch (error) {
+          const repaired = repairFromValidationError(error);
+          if (repaired) {
+            console.warn("[AI DEBUG] Groq output missed nullable keys; filled with null");
+            return repaired;
+          }
           // 429 on the primary model: try the fallback model once. Each model
           // has its own rate-limit bucket, so this usually succeeds. (The SDK
           // has already retried the primary with backoff before we get here.)
@@ -100,4 +126,4 @@ const createGroqProvider = ({ config = getAIConfig(), client } = {}) => {
   };
 };
 
-module.exports = { INTENT_SCHEMA, createGroqProvider, normalizeGroqError };
+module.exports = { repairFromValidationError, INTENT_SCHEMA, createGroqProvider, normalizeGroqError };
