@@ -1053,6 +1053,8 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
       // an earlier search/read in this chat (possibly read, possibly old) must
       // not be reused. Only "mark them / the last 2 as read" follows a listing.
       if (/\bunread\b/i.test(String(message || ""))) trustedIds = [];
+      // Candidates carry each message's threadId, used below to mark whole threads.
+      let candidatePool = Array.isArray(activeConversation.gmailCandidates) ? activeConversation.gmailCandidates : [];
       if (!trustedIds.length) {
         // Nothing listed yet in this conversation: find the unread messages
         // server-side instead of failing, so "mark my last 3 unread as read"
@@ -1062,11 +1064,14 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
         const found = normalizedCandidates(searchExecution.result);
         if (!found.length) return { status: "not_found", action: intent.action, message: "You have no unread emails to mark as read." };
         trustedIds = found.map(({ id }) => id);
+        candidatePool = found;
         await contextService.update({ userId: user._id, conversationId, gmailMessageIds: trustedIds, gmailCandidates: found, retrievedContext: found.map(({ id, ...candidate }) => ({ source: "gmail", content: JSON.stringify(candidate) })) });
       }
       // Search results are newest-first, so "the last N" is the first N.
       const idsToMark = trustedIds.slice(0, requested);
-      const execution = await actionExecutor({ user, provider: "google", action: intent.action, payload: { messageIds: idsToMark }, target: { type: "gmail_message", id: null }, approval, conversationId });
+      const markedSet = new Set(idsToMark);
+      const threadIds = [...new Set(candidatePool.filter((c) => c && markedSet.has(c.id) && c.threadId).map((c) => c.threadId))];
+      const execution = await actionExecutor({ user, provider: "google", action: intent.action, payload: { messageIds: idsToMark, ...(threadIds.length ? { threadIds } : {}) }, target: { type: "gmail_message", id: null }, approval, conversationId });
       if (execution.status !== "success") return { status: execution.status, action: intent.action, pendingAction: execution.pendingAction };
       return { status: "success", action: intent.action, result: safeResult(execution.result) };
     }

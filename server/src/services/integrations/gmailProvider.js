@@ -238,7 +238,12 @@ const createGmailProvider = ({ gmailFactory } = {}) => {
         const ids = [...new Set((Array.isArray(payload.messageIds) ? payload.messageIds : []).map((value) => messageId(value)).filter(Boolean))].slice(0, MAX_MARK_READ_IDS);
         if (!ids.length) throw safeError("gmail_invalid_request", "At least one Gmail message ID is required");
         await gmail.users.messages.batchModify({ userId: "me", requestBody: { ids, removeLabelIds: ["UNREAD"] } });
-        return { markedRead: ids.length, auditMetadata: { operation: "messages_marked_read", count: ids.length } };
+        // Gmail's inbox shows conversations, so a thread with two unread messages
+        // still looks unread if only one of them is marked. Also clear UNREAD on
+        // every message in the threads of the messages we just marked.
+        const threadIds = [...new Set((Array.isArray(payload.threadIds) ? payload.threadIds : []).map((value) => messageId(value)).filter(Boolean))].slice(0, MAX_MARK_READ_IDS);
+        await Promise.all(threadIds.map((id) => gmail.users.threads.modify({ userId: "me", id, requestBody: { removeLabelIds: ["UNREAD"] } })));
+        return { markedRead: ids.length, auditMetadata: { operation: "messages_marked_read", count: ids.length, threads: threadIds.length } };
       }
       if (action === "gmail.draft.update") {
         const draftId = messageId(payload.draftId);
