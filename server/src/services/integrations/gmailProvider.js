@@ -176,6 +176,25 @@ const normalizeSearchMessage = (message, includeBody = false) => {
   return { ...normalized, from: senderFromHeader(rawFrom) };
 };
 
+// The model sometimes puts plain words like "this week" in the query. Gmail does
+// not read those as dates: it treats them as keywords, so the search returns
+// unread mail that happens to contain "this" and "week" instead of recent mail.
+// Turn the common phrases into real Gmail operators. Quoted queries are left alone.
+const DATE_OPERATOR = /\b(?:after|before|newer_than|older_than):/i;
+const NATURAL_DATE_RULES = [
+  [/\b(?:this|past)\s+week\b/gi, "newer_than:7d"],
+  [/\blast\s+7\s+days\b/gi, "newer_than:7d"],
+  [/\btoday\b/gi, "newer_than:1d"],
+];
+const normalizeNaturalDates = (query) => {
+  if (query.includes('"')) return query;
+  let out = query;
+  for (const [pattern, operator] of NATURAL_DATE_RULES) {
+    out = out.replace(pattern, DATE_OPERATOR.test(out) ? "" : operator);
+  }
+  return out.replace(/\s+/g, " ").trim() || query;
+};
+
 const createGmailProvider = ({ gmailFactory } = {}) => {
   const clientFor = (auth) => (gmailFactory ? gmailFactory(auth) : require("googleapis").google.gmail({ version: "v1", auth }));
   const getMessage = async (gmail, id, format = "full", metadataHeaders) => {
@@ -192,8 +211,11 @@ const createGmailProvider = ({ gmailFactory } = {}) => {
         const requested = payload.maxResults === undefined ? 10 : Number(payload.maxResults);
         if (!Number.isInteger(requested) || requested < 1) throw safeError("gmail_invalid_request", "maxResults must be between 1 and 50");
         const maxResults = Math.min(requested, MAX_RESULTS);
-        const listed = await gmail.users.messages.list({ userId: "me", q: query, maxResults });
+        const listed = await gmail.users.messages.list({ userId: "me", q: normalizeNaturalDates(query), maxResults });
         const records = await Promise.all((listed.data.messages || []).slice(0, maxResults).map(({ id }) => getMessage(gmail, id, "full")));
+        // Gmail's list order is not strictly by time, so sort newest first here.
+        // markRead and "the last N" rely on index 0 being the newest message.
+        records.sort((a, b) => Number(b?.internalDate || 0) - Number(a?.internalDate || 0));
         return { messages: records.map(normalizeSearchMessage), auditMetadata: { count: records.length } };
       }
       if (action === "gmail.read") {

@@ -19,6 +19,9 @@ const CALENDAR_ACTIONS = new Set(["calendar.search", "calendar.read", "calendar.
 // eventId that is already server-trusted (from a prior calendar.search/read
 // in this conversation), never one invented by the client or the model.
 const CALENDAR_EVENT_ACTIONS = new Set(["calendar.read", "calendar.update", "calendar.delete"]);
+// Gmail search used when markRead has to find unread mail itself. "in:inbox"
+// matches what the inbox shows; use plain "is:unread" to include archived mail.
+const MARK_READ_UNREAD_QUERY = "in:inbox is:unread";
 const SUPPORTED_ACTIONS = new Set(["gmail.search", "gmail.read", "gmail.draft", "gmail.send", "gmail.draft.edit", "gmail.markRead", "clarification", "chat.respond", ...REPLY_ACTIONS, ...SEARCH_THEN_REPLY_ACTIONS, ...CALENDAR_ACTIONS]);
 const EMAIL = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i;
 const SECRET_KEYS = /token|credential|secret|authorization|api.?key|password/i;
@@ -1046,11 +1049,15 @@ const createActionOrchestrator = ({ contextService, actionExecutor = executeActi
     if (intent.action === "gmail.markRead") {
       const requested = Number.isInteger(intent.parameters?.maxResults) ? Math.min(Math.max(intent.parameters.maxResults, 1), 50) : 50;
       let trustedIds = (Array.isArray(activeConversation.gmailMessageIds) ? activeConversation.gmailMessageIds : []).slice(0, 50);
+      // "mark my last 7 unread" names a fresh set of mail, so IDs left over from
+      // an earlier search/read in this chat (possibly read, possibly old) must
+      // not be reused. Only "mark them / the last 2 as read" follows a listing.
+      if (/\bunread\b/i.test(String(message || ""))) trustedIds = [];
       if (!trustedIds.length) {
         // Nothing listed yet in this conversation: find the unread messages
         // server-side instead of failing, so "mark my last 3 unread as read"
         // works in one step. The IDs come from Gmail, never from the model.
-        const searchExecution = await actionExecutor({ user, provider: "google", action: "gmail.search", payload: { query: "is:unread", maxResults: requested }, target: { type: "gmail_search", id: null }, approval, conversationId });
+        const searchExecution = await actionExecutor({ user, provider: "google", action: "gmail.search", payload: { query: MARK_READ_UNREAD_QUERY, maxResults: requested }, target: { type: "gmail_search", id: null }, approval, conversationId });
         if (searchExecution.status !== "success") return { status: searchExecution.status, action: "gmail.search", pendingAction: searchExecution.pendingAction };
         const found = normalizedCandidates(searchExecution.result);
         if (!found.length) return { status: "not_found", action: intent.action, message: "You have no unread emails to mark as read." };
