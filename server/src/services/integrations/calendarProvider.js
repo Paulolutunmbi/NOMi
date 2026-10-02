@@ -5,6 +5,8 @@
 
 const SUPPORTED_ACTIONS = new Set([
   "calendar.search", "calendar.read", "calendar.freebusy", "calendar.create", "calendar.update", "calendar.delete",
+  // Direct agenda view (used by the Calendar screen, not the AI planner).
+  "calendar.agenda",
 ]);
 
 const MAX_RESULTS = 50;
@@ -80,6 +82,28 @@ const meetLinkFrom = (event) => {
   const video = entryPoints.find((entry) => entry.entryPointType === "video");
   return text(video?.uri, 500) || null;
 };
+// What kind of thing is this? Google has no "appointment" type, so:
+//  1. an explicit label NOMI/the user set (extendedProperties.private.nomiKind) wins;
+//  2. Google's own eventType (birthday, focus time, out of office...) next;
+//  3. otherwise a title/description heuristic marks appointments;
+//  4. everything else is a plain event.
+const KINDS = new Set(["event", "appointment"]);
+const SPECIAL_EVENT_TYPES = { birthday: "birthday", focusTime: "focus", outOfOffice: "out_of_office", workingLocation: "working_location", fromGmail: "reservation" };
+const APPOINTMENT_HINT = /\b(appointments?|appt|consultations?|check-?ups?|dentist|dental|doctor|dr\.|clinic|therapy|therapist|physio|booking|booked|interview|haircut|salon|barber|vet|hospital|screening)\b/i;
+const classifyEvent = (event) => {
+  const explicit = event?.extendedProperties?.private?.nomiKind;
+  if (KINDS.has(explicit)) return explicit;
+  const special = SPECIAL_EVENT_TYPES[event?.eventType];
+  if (special) return special;
+  if (APPOINTMENT_HINT.test(`${event?.summary || ""} ${event?.description || ""}`)) return "appointment";
+  return "event";
+};
+// Birthdays, Gmail reservations etc. are managed by Google, not editable here.
+const isEditableEvent = (event) => {
+  if (SPECIAL_EVENT_TYPES[event?.eventType] && !["focusTime", "outOfOffice"].includes(event.eventType)) return false;
+  if (!Array.isArray(event?.attendees) || !event.attendees.length) return true;
+  return Boolean(event.organizer?.self || event.creator?.self || event.guestsCanModify);
+};
 const normalizeEvent = (event) => ({
   id: text(event?.id, 1024),
   summary: text(event?.summary, MAX_SHORT_TEXT_LENGTH) || null,
@@ -91,7 +115,13 @@ const normalizeEvent = (event) => ({
   attendees: Array.isArray(event?.attendees) ? event.attendees.slice(0, 20).map(normalizeAttendee) : [],
   meetLink: meetLinkFrom(event),
   htmlLink: text(event?.htmlLink, 1000) || null,
+  kind: classifyEvent(event),
+  allDay: Boolean(event?.start?.date && !event?.start?.dateTime),
+  recurring: Boolean(event?.recurringEventId),
+  canEdit: isEditableEvent(event),
 });
+
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
 const HAS_OFFSET = /(Z|[+-]\d{2}:\d{2})$/;
 
@@ -164,6 +194,14 @@ const createCalendarProvider = ({ calendarFactory } = {}) => {
         const events = (listed.data.items || []).filter(inWindow).map(normalizeEvent);
         return { events, auditMetadata: { count: events.length, operation: "calendar_search" } };
       }
+      if (action === "calendar.agenda") {
+        const timeMin = isoDateTime(payload.timeMin);
+        const timeMax = isoDateTime(payload.timeMax);
+        if (!timeMin || !timeMax || !HAS_OFFSET.test(timeMin) || !HAS_OFFSET.test(timeMax)) throw safeError("calendar_invalid_request", "A valid timeMin and timeMax are required");
+        const listed = await calendar.events.list({ calendarId: "primary", timeMin, timeMax, maxResults: 250, singleEvents: true, orderBy: "startTime", showDeleted: false });
+        const events = (listed.data.items || []).filter((event) => event.status !== "cancelled").map(normalizeEvent);
+        return { events, auditMetadata: { count: events.length, operation: "calendar_agenda" } };
+      }
       if (action === "calendar.read") {
         const id = eventId(payload.eventId);
         if (!id) throw safeError("calendar_invalid_request", "A calendar event ID is required");
@@ -193,6 +231,7 @@ const createCalendarProvider = ({ calendarFactory } = {}) => {
           start: { dateTime: start, ...(payload.timeZone ? { timeZone: text(payload.timeZone, 100) } : {}) },
           end: { dateTime: end, ...(payload.timeZone ? { timeZone: text(payload.timeZone, 100) } : {}) },
           ...(attendees.length ? { attendees } : {}),
+          ...(KINDS.has(payload.kind) ? { extendedProperties: { private: { nomiKind: payload.kind } } } : {}),
           ...(payload.addMeet ? { conferenceData: { createRequest: { requestId: `nomi-${Date.now()}` } } } : {}),
         };
         const response = await calendar.events.insert({
@@ -225,6 +264,13 @@ const createCalendarProvider = ({ calendarFactory } = {}) => {
           const added = parseAttendees(payload.attendees).filter((entry) => !known.has(entry.email));
           requestBody.attendees = [...existing.map((entry) => ({ email: entry.email, ...(entry.responseStatus ? { responseStatus: entry.responseStatus } : {}), ...(entry.optional ? { optional: true } : {}) })), ...added];
         }
+        if (payload.startDate || payload.endDate) {
+          // All-day events use plain dates; Google's end date is exclusive.
+          if (!DATE_ONLY.test(payload.startDate || "") || !DATE_ONLY.test(payload.endDate || "")) throw safeError("calendar_invalid_request", "A valid start and end date are required");
+          requestBody.start = { date: payload.startDate };
+          requestBody.end = { date: payload.endDate };
+        }
+        if (KINDS.has(payload.kind)) requestBody.extendedProperties = { private: { nomiKind: payload.kind } };
         if (payload.addMeet) requestBody.conferenceData = { createRequest: { requestId: `nomi-${Date.now()}` } };
         if (!Object.keys(requestBody).length) throw safeError("calendar_invalid_request", "At least one field to update is required");
         const response = await calendar.events.patch({
@@ -244,4 +290,4 @@ const createCalendarProvider = ({ calendarFactory } = {}) => {
   return { execute };
 };
 
-module.exports = { createCalendarProvider, normalizeGoogleError, SUPPORTED_ACTIONS, parseAttendees, normalizeEvent };
+module.exports = { createCalendarProvider, normalizeGoogleError, SUPPORTED_ACTIONS, parseAttendees, normalizeEvent, classifyEvent };

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import EmailBody from './EmailBody'
+import KindBadge from './KindBadge'
 
 function initials(name, email) {
   const source = name || email || '?'
@@ -78,7 +79,10 @@ export function CalendarCandidates({ candidates, onSelect, disabled, title = 'Wh
         {candidates.map((c) => (
           <CandidateButton key={c.selectionId} onClick={() => onSelect?.(`calendar_select:${c.selectionId}`)} disabled={disabled || !onSelect}>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-semibold text-ink">{c.summary}</span>
+              <span className="flex items-center gap-2">
+                <span className="block min-w-0 flex-1 truncate text-sm font-semibold text-ink">{c.summary}</span>
+                <KindBadge kind={c.kind} />
+              </span>
               <span className="mt-0.5 block truncate text-xs text-ink-faint">
                 {[c.start, c.end].filter(Boolean).join(' – ')}
                 {c.location ? ` · ${c.location}` : ''}
@@ -152,7 +156,7 @@ export function ApprovalCard({ action, pendingAction, attachmentsMeta, onDecide,
   )
 }
 
-function EventCard({ event, timeZoneLabel, timeZoneDefaulted, timeZoneCountry }) {
+function EventCard({ event, timeZoneLabel, timeZoneDefaulted, timeZoneCountry, onComposeHint, onAction }) {
   const attendeeEmails = Array.isArray(event.attendees) ? event.attendees.map((a) => a.email).filter(Boolean) : []
   // "Set to Nigeria time (Lagos, WAT, UTC+1) with jane@example.com, sam@example.com."
   const zonePhrase = timeZoneLabel ? (timeZoneCountry ? `${timeZoneCountry} time (${timeZoneLabel})` : timeZoneLabel) : ''
@@ -162,7 +166,10 @@ function EventCard({ event, timeZoneLabel, timeZoneDefaulted, timeZoneCountry })
   const note = noteParts.length ? `${noteParts.join(' ')}.` : ''
   return (
     <div className="rounded-xl border border-line bg-surface p-3.5">
-      <p className="text-sm font-semibold text-ink">{event.summary || 'Untitled event'}</p>
+      <div className="flex items-center gap-2">
+        <p className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">{event.summary || 'Untitled event'}</p>
+        <KindBadge kind={event.kind} />
+      </div>
       <p className="mt-0.5 text-xs text-ink-faint">{[event.start, event.end].filter(Boolean).join(' – ')}{timeZoneLabel ? ` · ${timeZoneLabel}` : ''}</p>
       {note && (
         <p className="mt-1.5 text-xs text-ink-faint">
@@ -174,6 +181,20 @@ function EventCard({ event, timeZoneLabel, timeZoneDefaulted, timeZoneCountry })
         <a href={event.meetLink} target="_blank" rel="noreferrer" className="mt-2 inline-block text-xs font-medium text-nomi-orange hover:text-nomi-orange-dark">
           Join Google Meet
         </a>
+      )}
+      {(onComposeHint || onAction) && (
+        <div className="mt-3 flex flex-wrap gap-2 border-t border-line pt-3">
+          {onComposeHint && (
+            <button type="button" onClick={() => onComposeHint('Change this event: ')} className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-ink-soft transition-colors hover:border-nomi-orange hover:text-ink">
+              Edit
+            </button>
+          )}
+          {onAction && (
+            <button type="button" onClick={() => onAction('Cancel this event')} className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-ink-soft transition-colors hover:border-danger hover:text-danger">
+              Cancel event
+            </button>
+          )}
+        </div>
       )}
     </div>
   )
@@ -293,16 +314,16 @@ export function SuccessCard({ action, result, attachmentsMeta, selectedIdentity,
   }
   if (action === 'calendar.search' && Array.isArray(result?.events)) {
     if (!result.events.length) return <EmptyInline text="No calendar events found." />
-    return <CalendarCandidates candidates={result.events} onSelect={onSelectCandidate} title="Select an event to establish trusted action context" />
+    return <CalendarCandidates candidates={result.events} onSelect={onSelectCandidate} title="Tap an event to see its details, edit or cancel it" />
   }
-  if (action === 'calendar.selected' && result?.event) return <div className="nomi-enter space-y-2"><p className="text-xs text-ink-faint">Selected event</p><EventCard event={result.event} /></div>
+  if (action === 'calendar.selected' && result?.event) return <div className="nomi-enter space-y-2"><p className="text-xs text-ink-faint">Selected event</p><EventCard event={result.event} onComposeHint={onComposeHint} onAction={onSelectCandidate} /></div>
   if ((action === 'calendar.create' || action === 'calendar.update' || action === 'calendar.read') && result?.event) {
     return (
       <div className="nomi-enter space-y-2">
         <p className="text-sm font-medium text-ink">
           {action === 'calendar.create' ? 'Event created' : action === 'calendar.update' ? 'Event updated' : 'Event details'}
         </p>
-        <EventCard event={result.event} timeZoneLabel={result.timeZoneLabel} timeZoneDefaulted={result.timeZoneDefaulted} timeZoneCountry={result.timeZoneCountry} />
+        <EventCard event={result.event} timeZoneLabel={result.timeZoneLabel} timeZoneDefaulted={result.timeZoneDefaulted} timeZoneCountry={result.timeZoneCountry} onComposeHint={action === 'calendar.delete' ? undefined : onComposeHint} onAction={action === 'calendar.create' || action === 'calendar.read' ? onSelectCandidate : undefined} />
       </div>
     )
   }

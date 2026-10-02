@@ -8,7 +8,7 @@ import { useNomiConversation } from '../hooks/useNomiConversation'
 import { useChatSidebar } from '../context/ChatSidebarContext'
 import { getGoogleConnectUrl } from '../api/nomiClient'
 
-export default function Workspace({ placeholder, emptyTitle, emptyBody, suggestions = [] }) {
+export default function Workspace({ placeholder, emptyTitle, emptyBody, suggestions = [], prefill = null }) {
   const { chatId: selectedChatId } = useParams()
   const { setSelectedChatId, refreshChats, newChat } = useChatSidebar()
   const { turns, chatId, isProcessing, processingLabel, send, selectCandidate, respondApproval, editSendDraft, retryLast } =
@@ -19,6 +19,11 @@ export default function Workspace({ placeholder, emptyTitle, emptyBody, suggesti
   // user still reviews and finishes the message before it goes anywhere.
   const [draftText, setDraftText] = useState(null)
   const composeHint = (text) => setDraftText({ text, token: `${Date.now()}-${Math.random()}` })
+  // Text handed in by a parent (e.g. "Ask NOMI" on a calendar item) lands in
+  // the composer for the person to review — it is never sent automatically.
+  useEffect(() => {
+    if (prefill?.text) setDraftText(prefill)
+  }, [prefill])
 
   // The chat-history sidebar lives in AppShell (a route ancestor), so it
   // can't read this route's :chatId param itself — report it up instead,

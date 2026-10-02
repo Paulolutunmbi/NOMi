@@ -167,6 +167,20 @@ export function disconnectGoogle() {
   return request('/api/integrations/google', { method: 'DELETE' })
 }
 
+// Calendar screen: events for a window, and direct edit/cancel of
+// whichever event the person clicked. `from`/`to` are ISO instants with an offset.
+export function fetchAgenda({ from, to, signal }) {
+  return request(`/api/calendar/agenda?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, { signal })
+}
+
+export function updateCalendarEvent(eventId, patch) {
+  return request(`/api/calendar/events/${encodeURIComponent(eventId)}`, { method: 'PATCH', body: patch })
+}
+
+export function cancelCalendarEvent(eventId) {
+  return request(`/api/calendar/events/${encodeURIComponent(eventId)}`, { method: 'DELETE' })
+}
+
 export function fetchMe() {
   return request('/api/auth/me')
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 
-export default function Modal({ open, onClose, title, children }) {
+export default function Modal({ open, onClose, title, children, wide = false }) {
   const dialogRef = useRef(null)
 
   useEffect(() => {
@@ -32,7 +32,7 @@ export default function Modal({ open, onClose, title, children }) {
         aria-labelledby="nomi-modal-title"
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
-        className="w-full max-w-sm rounded-2xl border border-line bg-surface p-5 shadow-popover focus:outline-none"
+        className={`max-h-[90svh] w-full overflow-y-auto ${wide ? 'max-w-lg' : 'max-w-sm'} rounded-2xl border border-line bg-surface p-5 shadow-popover focus:outline-none`}
       >
         <div className="flex items-start justify-between gap-3">
           <h2 id="nomi-modal-title" className="text-sm font-semibold text-ink">{title}</h2>

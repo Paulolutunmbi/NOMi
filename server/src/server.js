@@ -13,6 +13,7 @@ const { createPermissionRouter } = require("./routes/permissionRoutes");
 const { createAuthRouter } = require("./routes/authRoutes");
 const { createAttachmentRouter } = require("./routes/attachmentRoutes");
 const { createChatRouter } = require("./routes/chatRoutes");
+const { createCalendarRouter } = require("./routes/calendarRoutes");
 const { cleanupExpiredAttachments } = require("./services/attachments/attachmentService");
 const ChatSession = require("./models/ChatSession");
 
@@ -33,6 +34,7 @@ app.use("/api/auth", createAuthRouter());
 app.use("/api/integrations/google", googleIntegrationRoutes);
 app.use("/api/ai", createAIIntentRouter());
 app.use("/api/ai", createAIActionRouter());
+app.use("/api/calendar", createCalendarRouter());
 app.use("/api/permissions", createPermissionRouter());
 
 // Providers self-describe their capabilities so action orchestration stays provider-agnostic.

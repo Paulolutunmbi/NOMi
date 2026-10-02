@@ -235,6 +235,7 @@ const publicCalendarCandidate = (event, index) => ({
   start: event?.start || null,
   end: event?.end || null,
   location: event?.location || null,
+  kind: event?.kind || "event",
 });
 const calendarPayloadFor = (intent) => {
   const { action, parameters: p } = intent;
