@@ -145,6 +145,11 @@ const createAIGateway = ({ providerName = process.env.AI_PROVIDER, adapters = {}
       rawModelOutputShape: intentShapeForLog(response),
       parsedIntentShape: intentShapeForLog(response),
       validation: { valid: validation.valid, ...(validation.reason ? { reason: validation.reason } : {}) },
+      // Only on failure, and only for date fields: the format of the value with
+      // every digit masked (e.g. "9999-99-99 99:99"), never the value itself.
+      ...(!validation.valid && /^invalid_(startDateTime|endDateTime|timeMin|timeMax)$/.test(validation.reason || "")
+        ? { badDateTimePattern: String(response?.parameters?.[validation.reason.slice(8)] ?? "").slice(0, 40).replace(/\d/g, "9") }
+        : {}),
     };
     const diagnostic = `[AI DEBUG] intent validation ${validation.valid ? "passed" : "failed"} ${JSON.stringify(validationDiagnostic)}`;
     (validation.valid ? console.info : console.warn)(diagnostic);

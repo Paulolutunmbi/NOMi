@@ -56,6 +56,35 @@ const PROVIDER_ID_LOOKALIKE = /(?:^|[\s<>])(?:[A-Za-z0-9_-]{16,}|[0-9a-fA-F]{12,
 const MAX_SUBJECT_LENGTH = 500;
 const MIN_SUBJECT_LENGTH = 1;
 const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/;
+// Models often return a near-miss of ISO 8601 for "tomorrow at 10am": a space
+// instead of "T", an offset without the colon (+0100), a 12-hour clock
+// ("10:00 AM"), or a single-digit hour. Accept those and rewrite them into the
+// strict form everything downstream expects. Anything that still doesn't fit
+// (a date with no time, free text) stays invalid - the server never guesses a
+// time the model didn't give.
+const LOOSE_DATETIME = /^(\d{4}-\d{2}-\d{2})[Tt ]\s*(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?(\.\d+)?\s*([AaPp])\.?[Mm]?\.?\s*(?:(Z|z)|([+-])(\d{2})(?::?(\d{2}))?)?$|^(\d{4}-\d{2}-\d{2})[Tt ]\s*(\d{1,2}):(\d{2})(?::(\d{2}))?(\.\d+)?\s*(?:(Z|z)|([+-])(\d{2})(?::?(\d{2}))?)?$/;
+const normalizeDateTime = (value) => {
+  const raw = String(value).trim();
+  if (ISO_DATETIME.test(raw)) return raw;
+  const m = raw.match(LOOSE_DATETIME);
+  if (!m) return null;
+  const twelveHour = m[6] !== undefined;
+  const [date, hourText, minute, second, fraction, utc, sign, offH, offM] = twelveHour
+    ? [m[1], m[2], m[3], m[4], m[5], m[7], m[8], m[9], m[10]]
+    : [m[11], m[12], m[13], m[14], m[15], m[16], m[17], m[18], m[19]];
+  let hour = Number(hourText);
+  if (twelveHour) {
+    if (hour < 1 || hour > 12) return null;
+    hour = (hour % 12) + (/^[Pp]$/.test(m[6]) ? 12 : 0);
+  }
+  const mm = minute === undefined ? 0 : Number(minute);
+  const ss = second === undefined ? null : Number(second);
+  if (hour > 23 || mm > 59 || (ss !== null && ss > 59)) return null;
+  const pad = (n) => String(n).padStart(2, "0");
+  const zone = utc ? "Z" : sign ? `${sign}${offH}:${offM || "00"}` : "";
+  const out = `${date}T${pad(hour)}:${pad(mm)}${ss === null ? "" : `:${pad(ss)}`}${fraction || ""}${zone}`;
+  return ISO_DATETIME.test(out) ? out : null;
+};
 const CALENDAR_EVENT_ACTIONS = new Set(["calendar.read", "calendar.update", "calendar.delete"]);
 
 // These are opaque model-facing markers, not aliases for an address. They
@@ -149,7 +178,10 @@ const validateIntent = (intent, { trustedGmailMessageIds = [], trustedCalendarEv
   if (["calendar.search", "calendar.freebusy", "calendar.create", "calendar.update"].includes(intent.action)) {
     for (const key of ["startDateTime", "endDateTime", "timeMin", "timeMax"]) {
       const value = intent.parameters[key];
-      if (value !== null && value !== undefined && !ISO_DATETIME.test(String(value).trim())) return { valid: false, reason: `invalid_${key}` };
+      if (value === null || value === undefined) continue;
+      const normalized = normalizeDateTime(value);
+      if (!normalized) return { valid: false, reason: `invalid_${key}` };
+      intent.parameters[key] = normalized;
     }
   }
   if (["calendar.create", "calendar.update"].includes(intent.action) && intent.parameters.attendees !== null) {
@@ -176,4 +208,4 @@ const validateIntent = (intent, { trustedGmailMessageIds = [], trustedCalendarEv
   return { valid: true, intent: { action: intent.action, parameters: { ...intent.parameters } } };
 };
 
-module.exports = { ACTIONS, REPLY_ACTIONS, CALENDAR_EVENT_ACTIONS, SELF_RECIPIENT_MARKERS, isSelfRecipientMarker, validateIntent, validateSubject, generateSubjectFromBody };
+module.exports = { normalizeDateTime, ACTIONS, REPLY_ACTIONS, CALENDAR_EVENT_ACTIONS, SELF_RECIPIENT_MARKERS, isSelfRecipientMarker, validateIntent, validateSubject, generateSubjectFromBody };
