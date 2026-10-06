@@ -95,7 +95,7 @@ export function AuthProvider({ children }) {
     isAuthenticated: Boolean(user),
     googleStatus: effectiveGoogleStatus,
     googleConnected: Boolean(effectiveGoogleStatus?.connected),
-    googleStatusLoading: Boolean(user) && effectiveGoogleStatus === undefined,
+    googleStatusLoading:Boolean(user) && legalAcceptance?.accepted === true && effectiveGoogleStatus === undefined,
     googleStatusError: effectiveGoogleStatusError,
     legalAcceptance,
     legalStatusLoading: Boolean(user) && legalAcceptance === undefined,
