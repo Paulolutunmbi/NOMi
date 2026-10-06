@@ -51,6 +51,9 @@ async function request(path, { method = 'GET', body, signal } = {}) {
     const errorPayload = data?.error
     const outcome = data?.outcome
     const code = errorPayload?.code || (outcome?.status === 'rejected' ? 'ACTION_REJECTED' : undefined)
+    if (data?.code === 'LEGAL_ACCEPTANCE_REQUIRED' || code === 'LEGAL_ACCEPTANCE_REQUIRED') {
+      window.dispatchEvent(new Event('nomi:legal-acceptance-required'))
+    }
     const details = errorPayload || outcome || null
     if (import.meta.env.DEV) {
       console.warn(`[NOMI API] ${method} ${path} returned ${response.status}`, { code, details })
@@ -183,6 +186,10 @@ export function cancelCalendarEvent(eventId) {
 
 export function fetchMe() {
   return request('/api/auth/me')
+}
+
+export function acceptLegalTerms() {
+  return request('/api/auth/legal-acceptance', { method: 'POST', body: {} })
 }
 
 // Sets or changes the country NOMI uses to default this user's calendar

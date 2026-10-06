@@ -3,6 +3,19 @@ const defaultAdmin = require("../config/firebase");
 const { findOrCreateFromFirebaseClaims } = require("../services/users/userService");
 const ConnectedAccount = require("../models/ConnectedAccount");
 const { defaultTimeZoneForCountry, isValidTimeZone } = require("../services/calendar/timeZoneResolver");
+const { version: LEGAL_VERSION } = require("../../../shared/legalVersion.json");
+
+const legalAcceptanceStatus = (user) => {
+  const acceptance = user.legalAcceptance || {};
+  const accepted = acceptance.termsVersion === LEGAL_VERSION && acceptance.privacyVersion === LEGAL_VERSION;
+  return {
+    termsVersion: acceptance.termsVersion || null,
+    privacyVersion: acceptance.privacyVersion || null,
+    acceptedAt: acceptance.acceptedAt || null,
+    currentVersion: LEGAL_VERSION,
+    accepted,
+  };
+};
 
 // The fallback for anyone who has not set a country yet, so a calendar event
 // still lands somewhere sane instead of drifting to the server's UTC clock.
@@ -41,6 +54,7 @@ const createAuthRouter = ({
           photoUrl: user.photoUrl || req.user.picture || null,
           country: user.country || null,
           timeZone: user.timeZone || DEFAULT_TIME_ZONE,
+          legalAcceptance: legalAcceptanceStatus(user),
         },
         connectedAccounts: connectedAccounts.map((acc) => ({
           id: acc._id,
@@ -52,6 +66,21 @@ const createAuthRouter = ({
         })),
         connectedAccountsCount: connectedAccounts.length,
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/legal-acceptance", requireAuth, async (req, res, next) => {
+    try {
+      const user = await getUser(req.user);
+      user.legalAcceptance = {
+        termsVersion: LEGAL_VERSION,
+        privacyVersion: LEGAL_VERSION,
+        acceptedAt: new Date(),
+      };
+      await user.save();
+      return res.status(200).json({ success: true, legalAcceptance: legalAcceptanceStatus(user) });
     } catch (error) {
       next(error);
     }

@@ -12,6 +12,11 @@ const userSchema = new mongoose.Schema(
     // zone resolved from it, used to default new calendar events.
     country: { type: String, default: null, trim: true },
     timeZone: { type: String, default: null, trim: true },
+    legalAcceptance: {
+      termsVersion: { type: String, default: null },
+      privacyVersion: { type: String, default: null },
+      acceptedAt: { type: Date, default: null },
+    },
   },
   { timestamps: true }
 );

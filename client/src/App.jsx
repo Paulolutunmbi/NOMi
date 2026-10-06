@@ -1,6 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import AppShell from './components/AppShell'
-import { RequireAuth, RequireGuest } from './components/RouteGuards'
+import { RequireAuth, RequireGuest, RequireLegalAcceptance } from './components/RouteGuards'
 import { useAuth } from './context/AuthContext'
 import { ChatSidebarProvider } from './context/ChatSidebarContext'
 import RootRoute from './pages/RootRoute'
@@ -12,6 +12,7 @@ import Home from './pages/Home'
 import Settings from './pages/Settings'
 import Privacy from './pages/Privacy'
 import Terms from './pages/Terms'
+import LegalAcceptance from './pages/LegalAcceptance'
 
 function AuthenticatedApp() {
   const { user, signOut } = useAuth()
@@ -39,15 +40,16 @@ function AppRoutes() {
       <Route path="/" element={<RootRoute />} />
       <Route path="/privacy" element={<Privacy />} />
       <Route path="/terms" element={<Terms />} />
+      <Route path="/legal-acceptance" element={<RequireAuth><LegalAcceptance /></RequireAuth>} />
       <Route path="/sign-in" element={<RequireGuest><SignIn /></RequireGuest>} />
       <Route path="/sign-up" element={<RequireGuest><SignUp /></RequireGuest>} />
       <Route path="/forgot-password" element={<RequireGuest><ForgotPassword /></RequireGuest>} />
-      <Route path="/onboarding" element={<RequireAuth><Onboarding /></RequireAuth>} />
+      <Route path="/onboarding" element={<RequireAuth><RequireLegalAcceptance><Onboarding /></RequireLegalAcceptance></RequireAuth>} />
       <Route
         path="/app/*"
         element={
           <RequireAuth>
-            <AuthenticatedApp />
+            <RequireLegalAcceptance><AuthenticatedApp /></RequireLegalAcceptance>
           </RequireAuth>
         }
       />

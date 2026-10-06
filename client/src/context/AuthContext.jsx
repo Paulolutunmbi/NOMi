@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { observeAuthState, signOutUser as firebaseSignOut } from '../services/auth'
-import { fetchGoogleStatus, logoutNomi } from '../api/nomiClient'
+import { fetchGoogleStatus, fetchMe, logoutNomi } from '../api/nomiClient'
 
 const AuthContext = createContext(null)
 
@@ -15,8 +15,34 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(undefined) // undefined = still checking, null = signed out
   const [googleStatus, setGoogleStatus] = useState(undefined) // undefined = not loaded yet, null = failed to load
   const [googleStatusError, setGoogleStatusError] = useState(null)
+  const [legalAcceptance, setLegalAcceptance] = useState(undefined)
+
+  const refreshLegalStatus = useCallback(async () => {
+    const data = await fetchMe()
+    setLegalAcceptance(data.user?.legalAcceptance || { accepted: false })
+    return data
+  }, [])
 
   useEffect(() => observeAuthState(setUser), [])
+
+  useEffect(() => {
+    if (!user) {
+      setLegalAcceptance(undefined)
+      return undefined
+    }
+    setLegalAcceptance(undefined)
+    let cancelled = false
+    fetchMe()
+      .then((data) => { if (!cancelled) setLegalAcceptance(data.user?.legalAcceptance || { accepted: false }) })
+      .catch(() => { if (!cancelled) setLegalAcceptance(null) })
+    return () => { cancelled = true }
+  }, [user])
+
+  useEffect(() => {
+    const requireAcceptance = () => setLegalAcceptance((current) => ({ ...(current || {}), accepted: false }))
+    window.addEventListener('nomi:legal-acceptance-required', requireAcceptance)
+    return () => window.removeEventListener('nomi:legal-acceptance-required', requireAcceptance)
+  }, [])
 
   const refreshGoogleStatus = useCallback(async () => {
     setGoogleStatusError(null)
@@ -32,7 +58,7 @@ export function AuthProvider({ children }) {
   }, [])
 
   useEffect(() => {
-    if (!user) return undefined
+    if (!user || !legalAcceptance?.accepted) return undefined
     let cancelled = false
 
     fetchGoogleStatus()
@@ -48,7 +74,7 @@ export function AuthProvider({ children }) {
     return () => {
       cancelled = true
     }
-  }, [user])
+  }, [user, legalAcceptance?.accepted])
 
   // Once signed out, any previously-fetched Google status no longer
   // applies — computed here rather than reset via a second effect, so
@@ -71,6 +97,9 @@ export function AuthProvider({ children }) {
     googleConnected: Boolean(effectiveGoogleStatus?.connected),
     googleStatusLoading: Boolean(user) && effectiveGoogleStatus === undefined,
     googleStatusError: effectiveGoogleStatusError,
+    legalAcceptance,
+    legalStatusLoading: Boolean(user) && legalAcceptance === undefined,
+    refreshLegalStatus,
     refreshGoogleStatus,
     signOut,
   }

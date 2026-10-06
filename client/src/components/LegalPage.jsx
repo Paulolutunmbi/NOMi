@@ -16,7 +16,7 @@ export default function LegalPage({ title, children }) {
         <div className="rounded-2xl border border-line bg-surface p-6 shadow-card sm:p-10">
           <p className="text-xs font-semibold uppercase tracking-wider text-nomi-orange">NOMI</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight">{title}</h1>
-          <p className="mt-2 text-sm text-ink-faint">Effective date: September 30, 2026</p>
+          <p className="mt-2 text-sm text-ink-faint">Effective date: October 5, 2026</p>
           <div className="legal-copy mt-8 space-y-7 text-sm leading-7 text-ink-soft">{children}</div>
         </div>
       </main>

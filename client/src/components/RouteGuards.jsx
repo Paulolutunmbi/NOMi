@@ -15,12 +15,22 @@ export function RequireAuth({ children }) {
   return children
 }
 
+export function RequireLegalAcceptance({ children }) {
+  const { legalAcceptance, legalStatusLoading } = useAuth()
+  const location = useLocation()
+  if (legalStatusLoading) return <LoadingScreen label="Checking legal acceptance…" />
+  if (legalAcceptance?.accepted !== true) return <Navigate to="/legal-acceptance" replace state={{ from: location }} />
+  return children
+}
+
 // Sign in / sign up / forgot password: only for signed-out visitors.
 export function RequireGuest({ children }) {
-  const { authLoading, isAuthenticated, user, googleConnected, googleStatusLoading } = useAuth()
+  const { authLoading, isAuthenticated, user, googleConnected, googleStatusLoading, legalAcceptance, legalStatusLoading } = useAuth()
 
   if (authLoading) return <LoadingScreen label="Checking your sign-in…" />
   if (isAuthenticated) {
+    if (legalStatusLoading) return <LoadingScreen label="Checking legal acceptance…" />
+    if (legalAcceptance?.accepted !== true) return <Navigate to="/legal-acceptance" replace />
     if (googleStatusLoading) return <LoadingScreen label="Loading your workspace…" />
     const target = googleConnected || hasOnboarded(user?.uid) ? '/app' : '/onboarding'
     return <Navigate to={target} replace />

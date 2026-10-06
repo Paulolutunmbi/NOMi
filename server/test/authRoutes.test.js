@@ -10,12 +10,12 @@ process.env.GOOGLE_APPLICATION_CREDENTIALS ||= path.join(__dirname, "..", "crede
 
 const { createAuthRouter } = require("../src/routes/authRoutes");
 
-const makeApp = ({ users = [] } = {}) => {
+const makeApp = ({ users = [], authMiddleware } = {}) => {
   const findUser = (uid) => users.find((u) => u.firebaseUid === uid);
   const getUser = async (claims) => {
     let user = findUser(claims.uid);
     if (!user) {
-      user = { firebaseUid: claims.uid, email: claims.email || null, displayName: claims.name || null, country: null, timeZone: null, async save() {} };
+      user = { firebaseUid: claims.uid, email: claims.email || null, displayName: claims.name || null, country: null, timeZone: null, legalAcceptance: null, async save() {} };
       users.push(user);
     }
     return user;
@@ -28,7 +28,7 @@ const makeApp = ({ users = [] } = {}) => {
     firebaseAdmin,
     getUser,
     connectedAccountModel,
-    authMiddleware: (req, _res, next) => { req.user = { uid: "u1", email: "paul@example.com" }; next(); },
+    authMiddleware: authMiddleware || ((req, _res, next) => { req.user = { uid: "u1", email: "paul@example.com" }; next(); }),
   }));
   return { app, users };
 };
@@ -45,6 +45,39 @@ test("GET /me returns Nigeria as the default time zone when no country is set ye
   const response = await fetch(`${base()}/me`).then((r) => r.json());
   assert.equal(response.user.country, null);
   assert.equal(response.user.timeZone, "Africa/Lagos");
+  assert.equal(response.user.legalAcceptance.accepted, false);
+});
+
+test("legal acceptance records both current versions and a timestamp, then /me reports accepted", async (t) => {
+  const { app, users } = makeApp();
+  const { server, base } = listen(app);
+  t.after(() => server.close());
+  const accepted = await fetch(`${base()}/legal-acceptance`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: "client-controlled-version" }) });
+  assert.equal(accepted.status, 200);
+  const result = await accepted.json();
+  assert.equal(result.legalAcceptance.termsVersion, result.legalAcceptance.currentVersion);
+  assert.equal(result.legalAcceptance.privacyVersion, result.legalAcceptance.currentVersion);
+  assert.equal(result.legalAcceptance.accepted, true);
+  assert.ok(result.legalAcceptance.acceptedAt);
+  assert.ok(users[0].legalAcceptance.acceptedAt instanceof Date);
+  const me = await fetch(`${base()}/me`).then((response) => response.json());
+  assert.equal(me.user.legalAcceptance.accepted, true);
+});
+
+test("an old legal version remains unaccepted", async (t) => {
+  const { app } = makeApp({ users: [{ firebaseUid: "u1", legalAcceptance: { termsVersion: "2026-10-04", privacyVersion: "2026-10-04", acceptedAt: new Date() }, async save() {} }] });
+  const { server, base } = listen(app);
+  t.after(() => server.close());
+  const me = await fetch(`${base()}/me`).then((response) => response.json());
+  assert.equal(me.user.legalAcceptance.accepted, false);
+});
+
+test("unauthenticated callers cannot record legal acceptance", async (t) => {
+  const { app } = makeApp({ authMiddleware: (_req, res) => res.status(401).json({ success: false }) });
+  const { server, base } = listen(app);
+  t.after(() => server.close());
+  const response = await fetch(`${base()}/legal-acceptance`, { method: "POST" });
+  assert.equal(response.status, 401);
 });
 
 test("PATCH /me/country sets the country and its resolved time zone, then /me reflects it", async (t) => {
